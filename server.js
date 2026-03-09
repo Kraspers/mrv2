@@ -1,0 +1,241 @@
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { Server } = require('socket.io');
+
+const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join(__dirname, 'data.json');
+
+function gid(n = 12) {
+  return crypto.randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n);
+}
+
+function now() { return Date.now(); }
+
+function freshInvite(serverId) {
+  const code = gid(10);
+  return {
+    code,
+    serverId,
+    createdAt: now(),
+    expiresAt: now() + 24 * 60 * 60 * 1000,
+    url: `/invite/${code}`,
+  };
+}
+
+function loadData() {
+  if (!fs.existsSync(DATA_FILE)) {
+    const seed = {
+      users: {},
+      sessions: {},
+      servers: {},
+      invites: {},
+      bans: { byIp: {}, byUser: {} },
+      admin: { password: process.env.ADMIN_PASSWORD || 'mrvall106' },
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(seed, null, 2));
+    return seed;
+  }
+  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+}
+
+let db = loadData();
+function save() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
+
+setInterval(() => {
+  const t = now();
+  for (const [code, inv] of Object.entries(db.invites)) {
+    if (inv.expiresAt <= t) {
+      const srv = db.servers[inv.serverId];
+      if (srv && srv.invite?.code === code) {
+        const ni = freshInvite(inv.serverId);
+        srv.invite = ni;
+        db.invites[ni.code] = ni;
+      }
+      delete db.invites[code];
+    }
+  }
+  save();
+}, 60 * 1000);
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+
+app.use(express.json({ limit: '2mb' }));
+app.use(express.static(__dirname));
+
+function ipOf(req) {
+  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
+}
+
+function auth(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+  const sess = token ? db.sessions[token] : null;
+  if (!sess) return res.status(401).json({ error: 'unauthorized' });
+  const ip = ipOf(req);
+  if (db.bans.byIp[ip]) return res.status(403).json({ error: 'banned', reason: db.bans.byIp[ip].reason || '' });
+  req.session = sess;
+  req.user = db.users[sess.userId];
+  next();
+}
+
+app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/admmrv', (_req, res) => res.sendFile(path.join(__dirname, 'morv-admin.html')));
+app.get('/login', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
+app.get('/invite/:code', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
+app.get('/servers/:code', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
+
+app.post('/api/auth/device', (req, res) => {
+  const ip = ipOf(req);
+  if (db.bans.byIp[ip]) return res.status(403).json({ error: 'banned', reason: db.bans.byIp[ip].reason || '' });
+  const deviceCode = String(req.body.deviceCode || gid(16));
+  let user = Object.values(db.users).find((u) => u.deviceCode === deviceCode);
+  if (!user) {
+    const id = gid(12);
+    user = { id, name: `user_${gid(5)}`, deviceCode, createdAt: now(), servers: [] };
+    db.users[id] = user;
+  }
+  const token = gid(36);
+  db.sessions[token] = { token, userId: user.id, ip, createdAt: now() };
+  save();
+  res.json({ token, user: { id: user.id, name: user.name } });
+});
+
+app.post('/api/panic', auth, (req, res) => {
+  const uid = req.user.id;
+  Object.keys(db.sessions).forEach((t) => { if (db.sessions[t].userId === uid) delete db.sessions[t]; });
+  delete db.users[uid];
+  Object.values(db.servers).forEach((s) => {
+    s.members = s.members.filter((m) => m !== uid);
+    Object.values(s.channels).forEach((c) => {
+      c.messages = c.messages.filter((m) => m.authorId !== uid);
+    });
+  });
+  save();
+  res.json({ ok: true });
+});
+
+app.post('/api/servers', auth, (req, res) => {
+  const id = gid(8);
+  const serverObj = {
+    id,
+    ownerId: req.user.id,
+    name: (req.body.name || `server-${id}`).toString(),
+    sections: [],
+    channels: {},
+    members: [req.user.id],
+    createdAt: now(),
+  };
+  const inv = freshInvite(id);
+  serverObj.invite = inv;
+  db.servers[id] = serverObj;
+  db.invites[inv.code] = inv;
+  req.user.servers = req.user.servers || [];
+  req.user.servers.push(id);
+  save();
+  res.json({ server: serverObj });
+});
+
+app.get('/api/servers', auth, (req, res) => {
+  const servers = Object.values(db.servers).filter((s) => s.members.includes(req.user.id));
+  res.json({ servers });
+});
+
+app.post('/api/servers/:id/channels', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  const cid = gid(10);
+  s.channels[cid] = { id: cid, name: req.body.name || 'new-channel', type: req.body.type || 'text', messages: [] };
+  save();
+  io.to(`server:${s.id}`).emit('server:update', s);
+  res.json({ channel: s.channels[cid] });
+});
+
+app.post('/api/invites/:code/join', auth, (req, res) => {
+  const inv = db.invites[req.params.code];
+  if (!inv || inv.expiresAt < now()) return res.status(404).json({ error: 'invite expired' });
+  const s = db.servers[inv.serverId];
+  if (!s) return res.status(404).json({ error: 'server not found' });
+  if (!s.members.includes(req.user.id)) s.members.push(req.user.id);
+  req.user.servers = req.user.servers || [];
+  if (!req.user.servers.includes(s.id)) req.user.servers.push(s.id);
+  save();
+  io.to(`server:${s.id}`).emit('server:update', s);
+  res.json({ serverId: s.id });
+});
+
+app.post('/api/admin/login', (req, res) => {
+  if (req.body.password !== db.admin.password) return res.status(401).json({ error: 'bad password' });
+  const token = gid(24);
+  db.sessions[token] = { token, userId: 'admin', ip: ipOf(req), createdAt: now(), admin: true };
+  save();
+  res.json({ token });
+});
+
+function adminAuth(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const s = token && db.sessions[token];
+  if (!s || !s.admin) return res.status(401).json({ error: 'admin unauthorized' });
+  next();
+}
+
+app.post('/api/admin/ban/server/:id', adminAuth, (req, res) => {
+  const srv = db.servers[req.params.id];
+  if (!srv) return res.status(404).json({ error: 'not found' });
+  const reason = req.body.reason || '';
+  srv.members.forEach((uid) => {
+    Object.values(db.sessions).forEach((sess) => {
+      if (sess.userId === uid && sess.ip) db.bans.byIp[sess.ip] = { reason, at: now(), serverId: srv.id };
+    });
+  });
+  save();
+  io.emit('ban:update');
+  res.json({ ok: true });
+});
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  const sess = token && db.sessions[token];
+  if (!sess) return next(new Error('unauthorized'));
+  socket.session = sess;
+  socket.user = db.users[sess.userId] || { id: sess.userId, name: 'unknown' };
+  next();
+});
+
+io.on('connection', (socket) => {
+  socket.on('server:join', ({ serverId }) => {
+    const s = db.servers[serverId];
+    if (!s || !s.members.includes(socket.user.id)) return;
+    socket.join(`server:${serverId}`);
+    socket.emit('server:init', s);
+  });
+
+  socket.on('message:send', ({ serverId, channelId, ciphertext, iv, keyId }) => {
+    const s = db.servers[serverId];
+    if (!s || !s.members.includes(socket.user.id)) return;
+    const ch = s.channels[channelId];
+    if (!ch) return;
+    const msg = { id: gid(12), authorId: socket.user.id, ts: now(), ciphertext, iv, keyId, reactions: {} };
+    ch.messages.push(msg);
+    save();
+    io.to(`server:${serverId}`).emit('message:new', { serverId, channelId, msg });
+  });
+
+  socket.on('reaction:set', ({ serverId, channelId, messageId, emoji }) => {
+    const s = db.servers[serverId];
+    const ch = s?.channels?.[channelId];
+    const m = ch?.messages?.find((x) => x.id === messageId);
+    if (!m) return;
+    m.reactions[emoji] = m.reactions[emoji] || [];
+    if (!m.reactions[emoji].includes(socket.user.id)) m.reactions[emoji].push(socket.user.id);
+    save();
+    io.to(`server:${serverId}`).emit('reaction:update', { serverId, channelId, messageId, reactions: m.reactions });
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Morv server running on http://localhost:${PORT}`);
+});

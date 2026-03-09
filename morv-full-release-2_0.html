@@ -1701,7 +1701,7 @@ html, body {
     </div>
   </div>
 </div>
-    <div class="privacy-badge-sub">Скриншот заблокирован.<br>Содержимое защищено.</div>
+    <div class="privacy-badge-sub"></div>
   </div>
 </div>
 <script>
@@ -1902,9 +1902,7 @@ function boot(sid,snm){
   $.msgs={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
   $.unread={[c1]:0,[c2]:0,[c3]:0,[c4]:0};
   $.pinned={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
-  $.members=[$.me,...Array.from({length:2+~~(Math.random()*4)},()=>({
-    id:gid(),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:false
-  }))];
+  $.members=[$.me];
   sysMsg(c1,'👻 Пространство создано. Поделитесь ссылкой.');
   sysMsg(c1,'🔒 Сквозное шифрование. Без данных.');
 
@@ -1934,7 +1932,6 @@ function boot(sid,snm){
   if(window.innerWidth>=700) switchCh(c1);
   else setView('ch');
 
-  sim();
 }
 
 function sysMsg(cid,txt){
@@ -2648,12 +2645,6 @@ function renderVcGrid(){
     g.appendChild(c);
   });
   clearInterval(window._vi);
-  window._vi=setInterval(()=>{
-    show.filter(m=>!m.you).forEach(m=>{
-      const el=document.getElementById('vc-'+m.id);
-      if(el)el.classList.toggle('sp',Math.random()>.55);
-    });
-  },1800);
 }
 
 // ── Sounds ──
@@ -3377,8 +3368,11 @@ function doPanic(){
   $.scheduled.forEach(s=>clearTimeout(s._timer));
   $.scheduled=[];
   closeSh('sh-panic');
+  const settings=document.getElementById('sh-settings');
+  if(settings) closeSh('sh-settings');
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
+  location.reload();
   toast('Данные удалены');
 }
 
@@ -3395,22 +3389,7 @@ function openLink(url){
 function doOpenLink(){ closeSh('sh-link'); window.open(_pendingLink,'_blank','noopener'); }
 
 // ── Simulate activity ──
-function sim(){
-  const chat=['кто онлайн?','привет 👋','morv 🔥','тест','анонимно — круто','ок','...','+','🤫'];
-  const go=()=>{
-    const tx=Object.values($.chs).filter(c=>c.type==='text'&&!c.readonly);
-    if(!tx.length)return;
-    const ch=tx[~~(Math.random()*tx.length)];
-    const oth=$.members.filter(m=>!m.you);
-    if(!oth.length)return;
-    const m=oth[~~(Math.random()*oth.length)];
-    $.msgs[ch.id].push({id:gid(),aid:m.id,author:m.name,text:chat[~~(Math.random()*chat.length)],ts:Date.now(),reactions:{}});
-    if($.cur===ch.id){renderMsgs();scrollDnIfAtBottom();}
-    else{$.unread[ch.id]=($.unread[ch.id]||0)+1; renderChs();}
-    setTimeout(go,10000+Math.random()*25000);
-  };
-  setTimeout(go,6000+Math.random()*10000);
-}
+function sim(){}
 
 // ── Format mode ──
 const FMT_MAP = {
