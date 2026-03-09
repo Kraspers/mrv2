@@ -16,17 +16,17 @@ npm start
 1. Создай **Web Service** на Render из этого репозитория.
 2. Убедись, что команды такие:
    - `Build Command`: `npm install --omit=dev`
-   - `Start Command`: `npm run start:render`
+   - `Start Command`: `npm start`
 3. Обязательно задай переменную `ADMIN_PASSWORD`.
 4. Для сохранения данных между рестартами используй persistent disk и путь в `DATA_FILE` (по умолчанию: `/var/data/mrv2-data.json`).
 
 ### Если видишь `MODULE_NOT_FOUND` в Render
 
-Чаще всего это значит, что сервис стартует без установленного `node_modules` или используется старая команда запуска в UI.
+Чаще всего это значит, что сервис стартует без установленного `node_modules` или Render в UI использует не тот Start Command.
 
 Проверь в Render Dashboard:
 - сервис типа **Web Service** (не Static Site);
-- Start Command именно `npm run start:render`;
+- Start Command именно `npm start`;
 - после изменения нажми **Manual Deploy → Clear build cache & deploy**.
 
 ## Основные маршруты
