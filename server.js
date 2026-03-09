@@ -17,6 +17,7 @@ function gid(n = 12) {
 }
 
 function now() { return Date.now(); }
+function makeServerId() { return `srv_${gid(8)}`; }
 
 function freshInvite(serverId) {
   const code = gid(10);
@@ -38,6 +39,7 @@ function loadData() {
       invites: {},
       bans: { byIp: {}, byUser: {} },
       admin: { password: process.env.ADMIN_PASSWORD || 'mrvall106' },
+      tombstones: {},
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(seed, null, 2));
     return seed;
@@ -46,6 +48,7 @@ function loadData() {
 }
 
 let db = loadData();
+if (!db.tombstones) db.tombstones = {};
 function save() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
 
 function serializeServer(s) {
@@ -71,6 +74,7 @@ function deleteServerEverywhere(serverId) {
   Object.values(db.users).forEach((u) => {
     u.servers = (u.servers || []).filter((id) => id !== serverId);
   });
+  db.tombstones[serverId] = { reason: 'server_deleted', at: now() };
   delete db.servers[serverId];
   return true;
 }
@@ -156,7 +160,7 @@ app.post('/api/panic', auth, (req, res) => {
 });
 
 app.post('/api/servers', auth, (req, res) => {
-  const id = gid(8);
+  const id = makeServerId();
   const serverObj = {
     id,
     ownerId: req.user.id,
@@ -195,6 +199,17 @@ app.post('/api/servers/:id/channels', auth, (req, res) => {
 });
 
 
+
+app.get('/api/servers/:id/state', auth, (req, res) => {
+  const sid = req.params.id;
+  if (db.tombstones[sid]) return res.status(404).json({ error: 'server deleted' });
+  const s = db.servers[sid];
+  if (!s) return res.status(404).json({ error: 'server not found' });
+  if (!s.members.includes(req.user.id)) return res.status(403).json({ error: 'removed' });
+  if (s.status === 'banned') return res.status(403).json({ error: 'banned', reason: 'Доступ к Morv был ограничен' });
+  res.json({ ok: true, server: serializeServer(s) });
+});
+
 app.get('/api/servers/:id/invite', auth, (req, res) => {
   const s = db.servers[req.params.id];
   if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
@@ -212,7 +227,7 @@ app.post('/api/invites/:code/join', auth, (req, res) => {
   const inv = db.invites[req.params.code];
   if (!inv || inv.expiresAt < now()) return res.status(404).json({ error: 'invite expired' });
   const s = db.servers[inv.serverId];
-  if (!s) return res.status(404).json({ error: 'server not found' });
+  if (!s) return res.status(404).json({ error: db.tombstones[inv.serverId] ? 'server deleted' : 'server not found' });
   if (!s.members.includes(req.user.id)) s.members.push(req.user.id);
   req.user.servers = req.user.servers || [];
   if (!req.user.servers.includes(s.id)) req.user.servers.push(s.id);
@@ -258,7 +273,7 @@ app.get('/api/admin/servers', adminAuth, (_req, res) => {
 });
 
 app.post('/api/admin/servers', adminAuth, (req, res) => {
-  const id = gid(8);
+  const id = makeServerId();
   const type = String(req.body.type || 'FO').toUpperCase();
   const name = String(req.body.name || `server-${id}`);
   const sections = Array.isArray(req.body.sections) ? req.body.sections : [];
@@ -287,6 +302,18 @@ app.post('/api/admin/servers', adminAuth, (req, res) => {
   db.invites[inv.code] = inv;
   save();
   res.json({ server: serializeServer(serverObj) });
+});
+
+
+app.post('/api/admin/servers/:id/update', adminAuth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s) return res.status(404).json({ error: 'not found' });
+  if (typeof req.body.name === 'string' && req.body.name.trim()) s.name = req.body.name.trim();
+  if (Array.isArray(req.body.sections)) s.sections = req.body.sections;
+  if (typeof req.body.org === 'string') s.org = req.body.org;
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
 });
 
 app.post('/api/admin/servers/:id/delete', adminAuth, (req, res) => {

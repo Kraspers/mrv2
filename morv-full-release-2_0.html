@@ -1794,6 +1794,14 @@ function toast(m){
 }
 const openSh=id=>document.getElementById(id).classList.add('on');
 const closeSh=id=>document.getElementById(id).classList.remove('on');
+function showBlocked(reason=''){
+  document.getElementById('landing').style.display='flex';
+  document.getElementById('app').classList.remove('on');
+  const t=document.querySelector('.land-sheet h2');
+  const p=document.querySelector('.land-sheet p');
+  if(t) t.textContent='Доступ к Morv был ограничен';
+  if(p) p.textContent=reason||'Обратитесь к администратору.';
+}
 
 const API={
   token: localStorage.getItem('morv_token')||'',
@@ -1821,6 +1829,9 @@ async function apiReq(path, opts={}){
   }
 
   if(!out.res.ok){
+    if(out.res.status===403 && (out.data.error==='banned'||out.data.error==='removed')){
+      showBlocked(out.data.reason||'');
+    }
     const err=new Error(out.data.error||('HTTP '+out.res.status));
     err.status=out.res.status; err.data=out.data;
     throw err;
@@ -1896,7 +1907,7 @@ async function joinServer(){
       if(!srv){ toast('Сервер не найден'); return; }
       boot(srv.id,srv.name,srv); return;
     }
-    const sid=(v.match(/servers\/([a-z0-9]{8})/i)||v.match(/([a-z0-9]{8})$/i));
+    const sid=(v.match(/servers\/(srv_[a-z0-9]{8}|[a-z0-9]{8})/i)||v.match(/(srv_[a-z0-9]{8}|[a-z0-9]{8})$/i));
     if(!sid){ toast('Неверная ссылка'); return; }
     const srv=await getMyServerById(sid[1]);
     if(!srv){ toast('Сервер не найден'); return; }
@@ -2026,8 +2037,33 @@ function boot(sid,snm,serverData=null){
   const firstText=Object.values($.chs).find(ch=>ch.type==='text');
   if(firstText&&window.innerWidth>=700) switchCh(firstText.id);
   else setView('ch');
+  startStatePoll();
 
 }
+
+let _statePoll=null;
+async function pollServerState(){
+  if(!$.sid) return;
+  try{
+    const st=await apiReq('/api/servers/'+$.sid+'/state',{auth:true});
+    if(st&&st.server){
+      if((st.server.name||'')!==$.snm){ $.snm=st.server.name||$.snm; document.getElementById('srvNm').textContent=$.snm; }
+      if(Array.isArray(st.server.sections)){
+        $.cats=st.server.sections.length?st.server.sections.map((sec,idx)=>({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))})):[{id:'sec0',name:'КАНАЛЫ'}];
+        renderChs();
+      }
+    }
+  }catch(e){
+    if(e.status===404){
+      toast('Сервер был удалён');
+      localStorage.removeItem('morv_last_server');
+      document.getElementById('app').classList.remove('on');
+      document.getElementById('landing').style.display='flex';
+      history.replaceState({},'','/login');
+    }
+  }
+}
+function startStatePoll(){ clearInterval(_statePoll); _statePoll=setInterval(pollServerState,3000); }
 
 function sysMsg(cid,txt){
   $.msgs[cid].push({id:gid(),sys:true,txt,ts:Date.now()});
@@ -3451,17 +3487,22 @@ function renderSeedList(){
   if(btn) btn.style.display=$.seeds.length>=3?'none':'block';
 }
 function confirmPanic(){ openSh('sh-panic'); }
-function doPanic(){
+async function doPanic(){
+  try{ await apiReq('/api/panic',{method:'POST',auth:true}); }catch(e){}
   Object.keys($.msgs).forEach(cid=>{$.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.aid!==$.me.id);});
   $.scheduled.forEach(s=>clearTimeout(s._timer));
   $.scheduled=[];
+  localStorage.removeItem('morv_last_server');
+  localStorage.removeItem('morv_token');
+  API.token='';
   closeSh('sh-panic');
   const settings=document.getElementById('sh-settings');
   if(settings) closeSh('sh-settings');
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
-  location.reload();
+  history.replaceState({},'','/login');
   toast('Данные удалены');
+  location.reload();
 }
 
 // ── External link ──
@@ -3536,10 +3577,14 @@ window.onerror = function(msg, src, line, col, err) {
 
 document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
+  const pth=location.pathname||'';
+  if(/^\/servers\//i.test(pth)||/^\/invite\//i.test(pth)){
+    document.getElementById('landing').style.display='none';
+  }
   try{
     await ensureSession();
     const path=location.pathname||'';
-    const srvM=path.match(/^\/servers\/([a-z0-9]{8})$/i);
+    const srvM=path.match(/^\/servers\/(srv_[a-z0-9]{8}|[a-z0-9]{8})$/i);
     const invM=path.match(/^\/invite\/([a-z0-9]{10})$/i);
     if(invM){
       try{
@@ -3554,7 +3599,9 @@ document.addEventListener('DOMContentLoaded',async ()=>{
       const last=localStorage.getItem('morv_last_server');
       if(last){
         const srv=await getMyServerById(last);
-        if(srv) boot(srv.id,srv.name,srv);
+        if(srv) boot(srv.id,srv.name,srv); else document.getElementById('landing').style.display='flex';
+      } else {
+        document.getElementById('landing').style.display='flex';
       }
     }
   }catch(e){}
