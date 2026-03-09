@@ -1802,21 +1802,34 @@ const API={
 localStorage.setItem('morv_device_code',API.deviceCode);
 
 async function apiReq(path, opts={}){
-  const headers=Object.assign({'Content-Type':'application/json'}, opts.headers||{});
-  if(opts.auth&&API.token) headers.Authorization='Bearer '+API.token;
-  const res=await fetch(path,{method:opts.method||'GET',headers,body:opts.body?JSON.stringify(opts.body):undefined});
-  let data={};
-  try{data=await res.json();}catch(e){}
-  if(!res.ok){
-    const err=new Error(data.error||('HTTP '+res.status));
-    err.status=res.status; err.data=data;
+  const doFetch=async()=>{
+    const headers=Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+    if(opts.auth&&API.token) headers.Authorization='Bearer '+API.token;
+    const res=await fetch(path,{method:opts.method||'GET',headers,body:opts.body?JSON.stringify(opts.body):undefined});
+    let data={};
+    try{data=await res.json();}catch(e){}
+    return {res,data};
+  };
+
+  let out=await doFetch();
+  if(opts.auth && out.res.status===401 && !opts._retried){
+    API.token='';
+    localStorage.removeItem('morv_token');
+    await ensureSession(true);
+    out=await apiReq(path,Object.assign({},opts,{_retried:true}));
+    return out;
+  }
+
+  if(!out.res.ok){
+    const err=new Error(out.data.error||('HTTP '+out.res.status));
+    err.status=out.res.status; err.data=out.data;
     throw err;
   }
-  return data;
+  return out.data;
 }
 
-async function ensureSession(){
-  if(API.token) return API.token;
+async function ensureSession(force=false){
+  if(API.token && !force) return API.token;
   const data=await apiReq('/api/auth/device',{method:'POST',body:{deviceCode:API.deviceCode}});
   API.token=data.token||'';
   if(API.token) localStorage.setItem('morv_token',API.token);
@@ -1867,7 +1880,8 @@ async function doCreateServer(){
     closeSh('sh-create');
     bootWithAva(data.server.id,data.server.name,window._srvAvaData||null,data.server);
   }catch(e){
-    toast('Ошибка создания сервера');
+    if(e.status===401||e.status===403) toast('Ошибка авторизации. Войдите снова');
+    else toast('Ошибка создания сервера');
   }
 }
 async function joinServer(){
