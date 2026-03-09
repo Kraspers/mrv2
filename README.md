@@ -13,13 +13,21 @@ npm start
 
 В репозиторий добавлен `render.yaml`.
 
-1. Создай Web Service на Render из этого репозитория.
-2. Render автоматически возьмёт:
-   - `buildCommand: npm install`
-   - `startCommand: npm start`
-   - `healthCheckPath: /health`
+1. Создай **Web Service** на Render из этого репозитория.
+2. Убедись, что команды такие:
+   - `Build Command`: `npm install --omit=dev`
+   - `Start Command`: `npm run start:render`
 3. Обязательно задай переменную `ADMIN_PASSWORD`.
-4. Для сохранения данных между рестартами используй disk и путь в `DATA_FILE` (по умолчанию в `render.yaml`: `/var/data/mrv2-data.json`).
+4. Для сохранения данных между рестартами используй persistent disk и путь в `DATA_FILE` (по умолчанию: `/var/data/mrv2-data.json`).
+
+### Если видишь `MODULE_NOT_FOUND` в Render
+
+Чаще всего это значит, что сервис стартует без установленного `node_modules` или используется старая команда запуска в UI.
+
+Проверь в Render Dashboard:
+- сервис типа **Web Service** (не Static Site);
+- Start Command именно `npm run start:render`;
+- после изменения нажми **Manual Deploy → Clear build cache & deploy**.
 
 ## Основные маршруты
 

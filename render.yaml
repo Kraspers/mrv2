@@ -3,8 +3,8 @@ services:
     name: morv2
     env: node
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm install --omit=dev
+    startCommand: npm run start:render
     envVars:
       - key: NODE_VERSION
         value: 22
