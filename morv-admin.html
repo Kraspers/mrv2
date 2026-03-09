@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morv Admin</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Unbounded:wght@400;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#080808;--bg2:#0f0f0f;--bg3:#161616;--bg4:#1e1e1e;
+  --border:#1e1e1e;--border2:#2a2a2a;
+  --t:#f0f0f0;--t2:#777;--t3:#333;
+  --ac:#e8ff47;--red:#ff4757;--green:#2ed573;--blue:#5352ed;
+  --mono:'JetBrains Mono',monospace;--head:'Unbounded',sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--t);font-family:var(--mono);overflow:hidden;}
+
+/* LOGIN */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:999;transition:opacity .35s,transform .35s;}
+#login.out{opacity:0;pointer-events:none;transform:scale(.96);}
+.lb{width:320px;background:var(--bg2);border:1px solid var(--border2);padding:36px 32px;position:relative;}
+.lb::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent 0%,var(--ac) 50%,transparent 100%);}
+.lb-logo{font-family:var(--head);font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:2px;}
+.lb-logo span{color:var(--ac);}
+.lb-sub{font-size:9px;color:var(--t3);letter-spacing:.18em;text-transform:uppercase;margin-bottom:28px;}
+.lb-lbl{font-size:9px;color:var(--t2);letter-spacing:.14em;text-transform:uppercase;margin-bottom:6px;}
+.lb-inp{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--t);font-family:var(--mono);font-size:13px;padding:10px 12px;outline:none;transition:border-color .2s;letter-spacing:.1em;}
+.lb-inp:focus{border-color:var(--ac);}
+.lb-inp::placeholder{color:var(--t3);}
+.lb-err{font-size:10px;color:var(--red);margin-top:8px;min-height:14px;letter-spacing:.04em;}
+.lb-btn{width:100%;margin-top:18px;padding:11px;background:var(--ac);color:#080808;font-family:var(--head);font-size:11px;font-weight:700;letter-spacing:.1em;border:none;cursor:pointer;transition:opacity .15s;}
+.lb-btn:hover{opacity:.85;}
+
+/* LAYOUT */
+#app{display:none;height:100vh;flex-direction:row;}
+#app.on{display:flex;}
+
+/* SIDEBAR */
+#sidebar{
+  width:220px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;height:100vh;overflow:hidden;
+  transition:transform .3s;
+}
+.sb-logo{padding:20px 20px 16px;border-bottom:1px solid var(--border);}
+.sb-logo-txt{font-family:var(--head);font-size:15px;font-weight:700;letter-spacing:-.02em;}
+.sb-logo-txt span{color:var(--ac);}
+.sb-ver{font-size:9px;color:var(--t3);letter-spacing:.12em;margin-top:2px;}
+.sb-nav{flex:1;overflow-y:auto;padding:12px 0;}
+.sb-section{font-size:9px;color:var(--t3);letter-spacing:.16em;text-transform:uppercase;padding:12px 20px 6px;}
+.sb-item{
+  display:flex;align-items:center;gap:10px;padding:9px 20px;
+  font-size:11px;color:var(--t2);cursor:pointer;transition:background .15s,color .15s;
+  border-left:2px solid transparent;letter-spacing:.04em;
+}
+.sb-item:hover{background:var(--bg3);color:var(--t);}
+.sb-item.active{background:var(--bg3);color:var(--ac);border-left-color:var(--ac);}
+.sb-item svg{opacity:.6;flex-shrink:0;}
+.sb-item.active svg{opacity:1;}
+.sb-badge{margin-left:auto;background:var(--red);color:white;font-size:9px;padding:1px 6px;border-radius:99px;}
+.sb-bottom{padding:16px 20px;border-top:1px solid var(--border);}
+.sb-admin{font-size:10px;color:var(--t3);letter-spacing:.04em;}
+.sb-admin span{color:var(--ac);}
+.sb-logout{margin-top:8px;font-size:10px;color:var(--t3);cursor:pointer;letter-spacing:.04em;transition:color .15s;}
+.sb-logout:hover{color:var(--red);}
+
+/* MAIN */
+#main{flex:1;overflow-y:auto;background:var(--bg);display:flex;flex-direction:column;}
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:16px 24px;
+  border-bottom:1px solid var(--border);background:var(--bg2);flex-shrink:0;
+}
+.topbar-menu{display:none;background:none;border:none;color:var(--t2);cursor:pointer;padding:4px;}
+.topbar-title{font-family:var(--head);font-size:13px;font-weight:600;letter-spacing:-.01em;}
+.topbar-path{font-size:10px;color:var(--t3);margin-left:auto;letter-spacing:.06em;}
+.content{padding:24px;flex:1;}
+
+/* VIEWS */
+.view{display:none;}
+.view.active{display:block;}
+
+/* STATS ROW */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;}
+@media(max-width:900px){.stats-row{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:500px){.stats-row{grid-template-columns:1fr 1fr;}}
+.stat-card{background:var(--bg2);border:1px solid var(--border);padding:16px 18px;}
+.stat-label{font-size:9px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;}
+.stat-val{font-family:var(--head);font-size:22px;font-weight:700;letter-spacing:-.02em;}
+.stat-val.ac{color:var(--ac);}
+.stat-val.red{color:var(--red);}
+.stat-val.green{color:var(--green);}
+.stat-val.blue{color:var(--blue);}
+.stat-sub{font-size:9px;color:var(--t3);margin-top:4px;letter-spacing:.04em;}
+
+/* SECTION HEADER */
+.sec-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.sec-title{font-size:11px;color:var(--t2);letter-spacing:.14em;text-transform:uppercase;}
+.sec-btn{
+  font-size:10px;font-family:var(--mono);background:var(--bg3);border:1px solid var(--border2);
+  color:var(--t2);padding:6px 14px;cursor:pointer;letter-spacing:.06em;transition:all .15s;
+}
+.sec-btn:hover{border-color:var(--ac);color:var(--ac);}
+.sec-btn.red:hover{border-color:var(--red);color:var(--red);}
+
+/* TABLE */
+.tbl{width:100%;border-collapse:collapse;margin-bottom:24px;}
+.tbl th{font-size:9px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
+.tbl td{padding:11px 12px;font-size:11px;color:var(--t2);border-bottom:1px solid var(--border);vertical-align:middle;}
+.tbl tr:hover td{background:var(--bg2);}
+.tbl .td-name{color:var(--t);font-size:12px;}
+.tbl .td-id{color:var(--t3);font-size:10px;letter-spacing:.06em;}
+.status{display:inline-flex;align-items:center;gap:5px;font-size:10px;letter-spacing:.06em;}
+.status::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.status.active::before{background:var(--green);}
+.status.banned::before{background:var(--red);}
+.status.archived::before{background:var(--t3);}
+.status.active{color:var(--green);}
+.status.banned{color:var(--red);}
+.status.archived{color:var(--t3);}
+.act-btn{background:none;border:1px solid var(--border2);color:var(--t2);font-size:9px;font-family:var(--mono);padding:4px 10px;cursor:pointer;letter-spacing:.08em;transition:all .15s;margin-right:4px;}
+.act-btn:hover{border-color:var(--ac);color:var(--ac);}
+.act-btn.danger:hover{border-color:var(--red);color:var(--red);}
+.act-btn.success:hover{border-color:var(--green);color:var(--green);}
+
+/* MODAL */
+#modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:none;align-items:center;justify-content:center;}
+#modal-bg.on{display:flex;}
+.modal{background:var(--bg2);border:1px solid var(--border2);padding:28px 28px 24px;width:560px;max-width:96vw;position:relative;max-height:90vh;overflow-y:auto;}
+.modal::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--ac),transparent);}
+.modal-title{font-family:var(--head);font-size:13px;font-weight:600;margin-bottom:18px;letter-spacing:-.01em;}
+.modal-lbl{font-size:9px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:6px;margin-top:14px;}
+.modal-inp{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--t);font-family:var(--mono);font-size:12px;padding:9px 12px;outline:none;transition:border-color .2s;}
+.modal-inp:focus{border-color:var(--ac);}
+.modal-select{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--t);font-family:var(--mono);font-size:12px;padding:9px 12px;outline:none;appearance:none;}
+.modal-row{display:flex;gap:10px;margin-top:20px;}
+.modal-btn{flex:1;padding:10px;font-family:var(--head);font-size:10px;font-weight:700;letter-spacing:.1em;border:1px solid var(--border2);background:none;color:var(--t2);cursor:pointer;transition:all .15s;}
+.modal-btn:hover{border-color:var(--t2);color:var(--t);}
+.modal-btn.primary{background:var(--ac);color:#080808;border-color:var(--ac);}
+.modal-btn.primary:hover{opacity:.85;}
+.modal-btn.danger{border-color:var(--red);color:var(--red);}
+.modal-btn.danger:hover{background:var(--red);color:white;}
+
+/* CHIP */
+.chip{display:inline-flex;align-items:center;padding:2px 8px;font-size:9px;letter-spacing:.08em;border-radius:2px;font-family:var(--mono);}
+.chip.fo{background:rgba(83,82,237,.15);color:var(--blue);border:1px solid rgba(83,82,237,.3);}
+.chip.school{background:rgba(46,213,115,.1);color:var(--green);border:1px solid rgba(46,213,115,.25);}
+.chip.archived{background:rgba(255,255,255,.04);color:var(--t3);border:1px solid var(--border);}
+
+/* FO ORGS */
+.org-card{background:var(--bg2);border:1px solid var(--border);padding:16px 18px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;transition:border-color .2s;}
+.org-card:hover{border-color:var(--border2);}
+.org-card.open{border-color:var(--ac);}
+.org-icon{width:36px;height:36px;background:var(--bg3);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}
+.org-name{font-size:13px;color:var(--t);font-weight:500;letter-spacing:.02em;}
+.org-meta{font-size:10px;color:var(--t3);margin-top:2px;letter-spacing:.04em;}
+.org-expand{margin-left:auto;color:var(--t3);transition:transform .2s;}
+.org-card.open .org-expand{transform:rotate(180deg);}
+.org-children{display:none;margin-left:20px;border-left:1px solid var(--border);padding-left:14px;margin-bottom:8px;}
+.org-children.on{display:block;}
+.server-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);margin-bottom:6px;}
+.server-row:hover{border-color:var(--border2);}
+.server-name{font-size:12px;color:var(--t);flex:1;}
+.server-meta{font-size:10px;color:var(--t3);letter-spacing:.04em;}
+
+/* SEARCH */
+.search-wrap{position:relative;margin-bottom:16px;}
+.search-inp{width:100%;background:var(--bg2);border:1px solid var(--border2);color:var(--t);font-family:var(--mono);font-size:12px;padding:9px 12px 9px 34px;outline:none;transition:border-color .2s;letter-spacing:.04em;}
+.search-inp:focus{border-color:var(--ac);}
+.search-ico{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--t3);}
+
+/* BAN LOG */
+.ban-entry{background:var(--bg2);border:1px solid var(--border);border-left:2px solid var(--red);padding:12px 16px;margin-bottom:8px;}
+.ban-entry.server{border-left-color:var(--red);}
+.ban-srv{font-size:12px;color:var(--t);margin-bottom:3px;}
+.ban-reason{font-size:10px;color:var(--t2);margin-bottom:6px;}
+.ban-meta{font-size:9px;color:var(--t3);letter-spacing:.06em;}
+
+/* MOBILE OVERLAY */
+#sb-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:199;}
+
+/* RESPONSIVE */
+@media(max-width:700px){
+  #sidebar{position:fixed;left:0;top:0;bottom:0;z-index:200;transform:translateX(-100%);}
+  #sidebar.open{transform:translateX(0);}
+  #sb-overlay.on{display:block;}
+  .topbar-menu{display:block;}
+  .stats-row{grid-template-columns:1fr 1fr;}
+  .content{padding:16px;}
+  .tbl th:nth-child(3),.tbl td:nth-child(3){display:none;}
+  .tbl th:nth-child(4),.tbl td:nth-child(4){display:none;}
+}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+
+/* EMPTY */
+.empty{text-align:center;padding:40px 20px;color:var(--t3);font-size:11px;letter-spacing:.08em;}
+
+/* TOAST */
+#toast{position:fixed;bottom:24px;right:24px;background:var(--bg3);border:1px solid var(--border2);border-left:2px solid var(--ac);padding:10px 18px;font-size:11px;color:var(--t);z-index:999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none;letter-spacing:.04em;}
+#toast.on{opacity:1;transform:translateY(0);}
+#toast.err{border-left-color:var(--red);}
+
+/* CONFIRM */
+#confirm-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:600;display:none;align-items:center;justify-content:center;}
+#confirm-bg.on{display:flex;}
+.confirm-box{background:var(--bg2);border:1px solid var(--border2);border-top:1px solid var(--red);padding:24px 24px 20px;width:360px;max-width:92vw;}
+.confirm-title{font-size:13px;color:var(--t);margin-bottom:6px;font-weight:500;}
+.confirm-txt{font-size:11px;color:var(--t2);margin-bottom:20px;line-height:1.6;}
+.confirm-row{display:flex;gap:8px;}
+.confirm-btn{flex:1;padding:9px;font-family:var(--head);font-size:10px;font-weight:700;letter-spacing:.1em;border:1px solid var(--border2);background:none;color:var(--t2);cursor:pointer;transition:all .15s;}
+.confirm-btn.danger{border-color:var(--red);color:var(--red);}
+.confirm-btn.danger:hover{background:var(--red);color:white;}
+.confirm-btn:hover{border-color:var(--t2);color:var(--t);}
+
+/* ARCHIVE TREE */
+.archive-year{margin-bottom:16px;}
+.archive-year-hd{font-size:10px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.archive-class{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--bg2);border:1px solid var(--border);margin-bottom:5px;}
+.archive-class-name{font-size:12px;color:var(--t);flex:1;}
+.archive-class-meta{font-size:10px;color:var(--t3);}
+.archive-badge{font-size:9px;padding:2px 8px;background:rgba(255,255,255,.04);color:var(--t3);border:1px solid var(--border);letter-spacing:.06em;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <div class="lb">
+    <div class="lb-logo">morv<span>.</span>admin</div>
+    <div class="lb-sub">Панель управления</div>
+    <div class="lb-lbl">Пароль</div>
+    <input class="lb-inp" type="password" id="pwdInp" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+    <div class="lb-err" id="loginErr"></div>
+    <button class="lb-btn" onclick="doLogin()">ВОЙТИ</button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div id="sb-overlay" onclick="closeSb()"></div>
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sb-logo">
+      <div class="sb-logo-txt">morv<span>.</span>admin</div>
+      <div class="sb-ver">v1.0 · SYSTEM</div>
+    </div>
+    <div class="sb-nav">
+      <div class="sb-section">Модерация</div>
+      <div class="sb-item active" data-nav="moderation" onclick="nav('moderation')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Обзор
+      </div>
+      <div class="sb-item" data-nav="servers" onclick="nav('servers')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Серверы
+        <span class="sb-badge" id="badge-servers">0</span>
+      </div>
+      <div class="sb-item" data-nav="banned" onclick="nav('banned')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        Бан-лист
+        <span class="sb-badge" id="badge-banned">0</span>
+      </div>
+      <div class="sb-section">Morv FO</div>
+      <div class="sb-item" data-nav="fo-orgs" onclick="nav('fo-orgs')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Организации
+      </div>
+      <div class="sb-item" data-nav="fo-fsc" onclick="nav('fo-fsc')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+        Morv FSC
+      </div>
+      <div class="sb-item" data-nav="fo-archive" onclick="nav('fo-archive')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        Архив
+      </div>
+    </div>
+    <div class="sb-bottom">
+      <div class="sb-admin">Вход выполнен как <span>admin</span></div>
+      <div class="sb-logout" onclick="doLogout()">← Выйти</div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div id="main">
+    <div class="topbar">
+      <button class="topbar-menu" onclick="openSb()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="topbar-title" id="topbarTitle">Обзор</div>
+      <div class="topbar-path" id="topbarPath">MODERATION</div>
+    </div>
+    <div class="content">
+
+      <!-- MODERATION OVERVIEW -->
+      <div class="view active" id="view-moderation">
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-label">Серверов</div>
+            <div class="stat-val ac" id="stat-servers">0</div>
+            <div class="stat-sub">всего активных</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Заблокировано</div>
+            <div class="stat-val red" id="stat-banned">0</div>
+            <div class="stat-sub">серверов в бан-листе</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Организаций FO</div>
+            <div class="stat-val blue" id="stat-orgs">0</div>
+            <div class="stat-sub">подключено</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Школ FSC</div>
+            <div class="stat-val green" id="stat-schools">0</div>
+            <div class="stat-sub">активных</div>
+          </div>
+        </div>
+        <div class="sec-hd">
+          <div class="sec-title">Последние действия</div>
+        </div>
+        <div id="recent-log">
+          <div class="empty">Действий пока нет</div>
+        </div>
+      </div>
+
+      <!-- SERVERS -->
+      <div class="view" id="view-servers">
+        <div class="sec-hd">
+          <div class="sec-title">Серверы FO / FSC</div>
+        </div>
+        <div id="fo-servers-wrap"></div>
+      </div>
+
+      <!-- BAN LIST -->
+      <div class="view" id="view-banned">
+        <div class="sec-hd">
+          <div class="sec-title">Бан-лист</div>
+          <button class="sec-btn red" onclick="clearBanList()">Очистить</button>
+        </div>
+        <div id="ban-list-wrap"></div>
+      </div>
+
+      <!-- FO ORGS -->
+      <div class="view" id="view-fo-orgs">
+        <div class="sec-hd">
+          <div class="sec-title">Организации</div>
+          <button class="sec-btn" onclick="openAddOrgModal()">+ Добавить</button>
+        </div>
+        <div id="orgs-list"></div>
+      </div>
+
+      <!-- FSC -->
+      <div class="view" id="view-fo-fsc">
+        <div class="sec-hd">
+          <div class="sec-title">Morv FSC — Школы</div>
+          <button class="sec-btn" onclick="openAddSchoolModal()">+ Добавить школу</button>
+        </div>
+        <div id="fsc-list"></div>
+      </div>
+
+      <!-- ARCHIVE -->
+      <div class="view" id="view-fo-archive">
+        <div class="sec-hd">
+          <div class="sec-title">Архив классов</div>
+        </div>
+        <div id="archive-list">
+          <div class="empty">Архивированных классов нет</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Ban by ID -->
+<div id="modal-bg" onclick="closeModal(event)">
+  <div class="modal" id="modal-box">
+    <div class="modal-title" id="modal-title">Заблокировать сервер</div>
+    <div id="modal-body"></div>
+    <div class="modal-row" id="modal-actions"></div>
+  </div>
+</div>
+
+<!-- CONFIRM -->
+<div id="confirm-bg">
+  <div class="confirm-box">
+    <div class="confirm-title" id="confirm-title">Подтвердить</div>
+    <div class="confirm-txt" id="confirm-txt"></div>
+    <div class="confirm-row">
+      <button class="confirm-btn" onclick="closeConfirm()">Отмена</button>
+      <button class="confirm-btn danger" id="confirm-ok">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── STATE ──
+const STATE = {
+  foServers: [], // серверы созданные в FO/FSC — видны в разделе Серверы
+  banned: [],
+  orgs: [],
+  schools: [],
+  archive: [],
+  log: [],
+};
+
+// ── UTILS ──
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function uid(){ return 'srv_'+Math.random().toString(36).slice(2,8); }
+function gid6(){ return Math.random().toString(36).slice(2,8).toUpperCase(); }
+function copyId(id){
+  try {
+    if(navigator&&navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(id).then(()=>toast('ID скопирован')).catch(()=>copyIdFallback(id));
+    } else {
+      copyIdFallback(id);
+    }
+  } catch(e){ copyIdFallback(id); }
+}
+function copyIdFallback(id){
+  try {
+    const ta=document.createElement('textarea');
+    ta.value=id; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('ID скопирован');
+  } catch(e){ toast('ID: '+id); }
+}
+function nowDate(){ return new Date().toLocaleDateString('ru'); }
+function nowTS(){
+  const d=new Date();
+  return d.toLocaleDateString('ru')+' '+d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+}
+
+// ── LOGIN ──
+function doLogin(){
+  const v = document.getElementById('pwdInp').value;
+  if(v==='mrvall106'){
+    document.getElementById('login').classList.add('out');
+    document.getElementById('app').classList.add('on');
+    renderAll();
+  } else {
+    const err=document.getElementById('loginErr');
+    err.textContent='Неверный пароль';
+    document.getElementById('pwdInp').value='';
+    setTimeout(()=>err.textContent='',2500);
+  }
+}
+function doLogout(){
+  document.getElementById('login').classList.remove('out');
+  document.getElementById('app').classList.remove('on');
+  document.getElementById('pwdInp').value='';
+}
+
+// ── NAV ──
+const TITLES={
+  'moderation':['Обзор','MODERATION'],
+  'servers':['Серверы FO/FSC','MODERATION / SERVERS'],
+  'banned':['Бан-лист','MODERATION / BANNED'],
+  'fo-orgs':['Организации','MORV FO / ORGS'],
+  'fo-fsc':['Morv FSC','MORV FO / FSC'],
+  'fo-archive':['Архив','MORV FO / ARCHIVE'],
+};
+let currentView='moderation';
+function nav(id){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
+  document.getElementById('view-'+id).classList.add('active');
+  const el=document.querySelector('.sb-item[data-nav="'+id+'"]');
+  if(el) el.classList.add('active');
+  const t=TITLES[id]||[id,''];
+  document.getElementById('topbarTitle').textContent=t[0];
+  document.getElementById('topbarPath').textContent=t[1];
+  currentView=id;
+  renderView(id);
+  closeSb();
+}
+function renderAll(){ Object.keys(TITLES).forEach(renderView); updateBadges(); updateStats(); }
+function renderView(id){
+  if(id==='moderation') renderLog();
+  if(id==='servers') renderFOServers();
+  if(id==='banned') renderBanned();
+  if(id==='fo-orgs') renderOrgs();
+  if(id==='fo-fsc') renderFSC();
+  if(id==='fo-archive') renderArchive();
+}
+
+// ── SIDEBAR MOBILE ──
+function openSb(){ document.getElementById('sidebar').classList.add('open'); document.getElementById('sb-overlay').classList.add('on'); }
+function closeSb(){ document.getElementById('sidebar').classList.remove('open'); document.getElementById('sb-overlay').classList.remove('on'); }
+
+// ── STATS & BADGES ──
+function updateStats(){
+  document.getElementById('stat-servers').textContent = STATE.foServers.filter(s=>s.status==='active').length;
+  document.getElementById('stat-banned').textContent = STATE.banned.length;
+  document.getElementById('stat-orgs').textContent = STATE.orgs.length;
+  document.getElementById('stat-schools').textContent = STATE.schools.length;
+}
+function updateBadges(){
+  document.getElementById('badge-servers').textContent = STATE.foServers.filter(s=>s.status==='active').length;
+  document.getElementById('badge-banned').textContent = STATE.banned.length;
+}
+
+// ── LOG ──
+function addLog(text){
+  STATE.log.unshift({text,ts:nowTS()});
+  if(STATE.log.length>50) STATE.log.pop();
+  renderLog();
+}
+function renderLog(){
+  const box=document.getElementById('recent-log');
+  if(!STATE.log.length){ box.innerHTML='<div class="empty">Действий пока нет</div>'; return; }
+  box.innerHTML=STATE.log.slice(0,10).map(l=>`
+    <div class="ban-entry" style="border-left-color:var(--ac)">
+      <div class="ban-srv">${esc(l.text)}</div>
+      <div class="ban-meta">${l.ts}</div>
+    </div>`).join('');
+}
+
+// ── FO SERVERS LIST ──
+function renderFOServers(){
+  const box=document.getElementById('fo-servers-wrap');
+  const list=STATE.foServers;
+  if(!list.length){ box.innerHTML='<div class="empty" style="margin-top:40px">Серверов FO/FSC нет.<br><span style="font-size:10px">Создайте серверы в разделах Организации или FSC.</span></div>'; return; }
+  const hdr=`<div style="display:flex;gap:8px;margin-bottom:12px;">
+    <button class="sec-btn" onclick="openBanByIdModal()">+ Заблокировать по ID</button>
+  </div>`;
+  const rows=list.map(s=>`
+    <div class="ban-entry" style="border-left-color:${s.status==='banned'?'var(--red)':'var(--blue)'};cursor:pointer"
+      onmousedown="lpStart(event,()=>openEditFOServer('${s.id}'))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>openEditFOServer('${s.id}'))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-size:12px;color:var(--t);margin-bottom:3px">${esc(s.name)}</div>
+          <div style="font-size:9px;color:var(--t3);letter-spacing:.06em">ID: <span onclick="copyId('${s.id}')" title="Копировать ID" style="color:var(--ac);cursor:pointer;border-bottom:1px dashed var(--ac);letter-spacing:.08em">${s.id}</span> · ${s.org} · <span class="chip ${s.type==='FSC'?'school':'fo'}" style="padding:1px 5px;font-size:8px">${s.type}</span> · ${s.created}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="status ${s.status==='banned'?'banned':'active'}">${s.status==='banned'?'Заблокирован':'Активен'}</span>
+          <span style="font-size:9px;color:var(--t3);letter-spacing:.06em">удержи для ред.</span>
+        </div>
+      </div>
+      ${s.sections&&s.sections.length?'<div style="margin-top:8px;font-size:10px;color:var(--t3)">'+s.sections.map(sec=>'<span style="margin-right:8px">'+esc(sec.name)+' <span style="color:var(--t3)">('+sec.channels.length+' кан.)</span></span>').join('')+'</div>':''}
+    </div>`).join('');
+  box.innerHTML=hdr+rows;
+}
+function banFOServer(id){
+  const s=STATE.foServers.find(x=>x.id===id); if(!s) return;
+  showConfirm('Заблокировать сервер?',`Сервер «${s.name}» (${s.id}) будет заблокирован.`,()=>{
+    s.status='banned';
+    STATE.banned.push({id:s.id,name:s.name,reason:'Нарушение правил',date:nowDate()});
+    addLog(`FO-сервер «${s.name}» заблокирован`);
+    updateBadges(); updateStats(); renderFOServers(); renderBanned();
+    toast(`Сервер заблокирован`);
+  });
+}
+function unbanFOServer(id){
+  const s=STATE.foServers.find(x=>x.id===id); if(!s) return;
+  s.status='active';
+  STATE.banned=STATE.banned.filter(b=>b.id!==id);
+  addLog(`FO-сервер «${s.name}» разблокирован`);
+  updateBadges(); updateStats(); renderFOServers(); renderBanned();
+  toast('Разблокировано');
+}
+
+// ── BAN BY ID ──
+let _pendingReason='';
+function openBanByIdModal(){
+  showModal('Заблокировать по ID сервера',`
+    <div class="modal-lbl">ID сервера</div>
+    <input class="modal-inp" id="ban-id-inp" placeholder="srv_xxxxxxxx" oninput="const e=document.getElementById('ban-id-err');if(e)e.style.display='none'">
+    <div id="ban-id-err" style="display:none;margin-top:6px;font-size:10px;color:var(--red);letter-spacing:.04em">Сервер с таким ID не найден в системе.</div>
+    <div class="modal-lbl">Причина</div>
+    <input class="modal-inp" id="ban-reason-inp" placeholder="Нарушение правил платформы">
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Заблокировать',cls:'danger',fn:doBanById}
+  ]);
+}
+function doBanById(){
+  const id=document.getElementById('ban-id-inp').value.trim();
+  const reason=document.getElementById('ban-reason-inp').value.trim()||'Нарушение правил';
+  if(!id){ toast('Введите ID',true); return; }
+  const fo=STATE.foServers.find(s=>s.id===id);
+  if(!fo){
+    // ID not found — show error inside modal
+    const errEl=document.getElementById('ban-id-err');
+    if(errEl){ errEl.textContent='Сервер с таким ID не найден в системе.'; errEl.style.display='block'; }
+    toast('ID не найден в системе',true);
+    return;
+  }
+  if(STATE.banned.find(b=>b.id===id)){ toast('Уже в бан-листе',true); return; }
+  fo.status='banned';
+  STATE.banned.push({id,name:fo.name,reason,date:nowDate()});
+  addLog(`ID ${id} добавлен в бан-лист`);
+  updateBadges(); updateStats(); renderBanned(); renderFOServers();
+  M.close(); toast(`ID ${id} заблокирован`);
+}
+
+// ── BAN LIST ──
+function renderBanned(){
+  const box=document.getElementById('ban-list-wrap');
+  if(!STATE.banned.length){ box.innerHTML='<div class="empty">Бан-лист пуст</div>'; return; }
+  box.innerHTML=STATE.banned.map(b=>`
+    <div class="ban-entry server">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div class="ban-srv">${esc(b.name)}</div>
+        <button class="act-btn success" onclick="unbanById('${b.id}')" style="margin:0">Разбан</button>
+      </div>
+      <div class="ban-reason">Причина: ${esc(b.reason)}</div>
+      <div class="ban-meta">ID: ${b.id} · Дата: ${b.date}</div>
+    </div>`).join('');
+}
+function unbanById(id){
+  STATE.banned=STATE.banned.filter(b=>b.id!==id);
+  const fo=STATE.foServers.find(x=>x.id===id); if(fo) fo.status='active';
+  addLog(`ID ${id} удалён из бан-листа`);
+  updateBadges(); updateStats(); renderBanned(); renderFOServers();
+  toast('Разблокировано');
+}
+function clearBanList(){
+  if(!STATE.banned.length) return;
+  showConfirm('Очистить бан-лист?','Все заблокированные серверы будут разблокированы.',()=>{
+    STATE.banned.forEach(b=>{ const fo=STATE.foServers.find(x=>x.id===b.id); if(fo) fo.status='active'; });
+    STATE.banned=[];
+    addLog('Бан-лист очищен');
+    updateBadges(); updateStats(); renderBanned(); renderFOServers();
+    toast('Бан-лист очищен');
+  });
+}
+
+// ── LONG PRESS ──
+let _lpTimer=null;
+function lpStart(e,fn){
+  _lpTimer=setTimeout(()=>{ fn(); },600);
+}
+function lpEnd(){ clearTimeout(_lpTimer); }
+
+// ── SERVER BUILDER — Discord/Morv style ──
+let _srvBuilderCtx=null;
+let _buildSrv=null;
+let _activeSec=0; // выбранный раздел в билдере
+
+function openServerBuilder(ctx){
+  _srvBuilderCtx=ctx;
+  _buildSrv={name:'',sections:[]};
+  _activeSec=0;
+  showSrvBuilder();
+}
+
+function showSrvBuilder(){
+  const s=_buildSrv;
+  const activeSec=s.sections[_activeSec];
+
+  const leftSecs=s.sections.map((sec,si)=>`
+    <div onclick="selectSrvSec(${si})" style="
+      display:flex;align-items:center;gap:6px;
+      padding:7px 10px;cursor:pointer;border-radius:3px;
+      background:${si===_activeSec?'var(--bg4)':'transparent'};
+      border-left:2px solid ${si===_activeSec?'var(--ac)':'transparent'};
+      margin-bottom:2px;user-select:none;
+      "
+      onmousedown="lpStart(event,()=>editSecName(${si}))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editSecName(${si}))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <span style="font-size:11px;color:${si===_activeSec?'var(--t)':'var(--t2)'};flex:1;letter-spacing:.02em">${esc(sec.name)}</span>
+      <button onclick="event.stopPropagation();removeSrvSection(${si})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:11px;padding:0 2px;line-height:1" title="Удалить раздел">✕</button>
+    </div>`).join('');
+
+  const rightChannels=activeSec ? activeSec.channels.map((ch,ci)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:3px;background:var(--bg3);margin-bottom:4px;"
+      onmousedown="lpStart(event,()=>editChName(${_activeSec},${ci}))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editChName(${_activeSec},${ci}))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <span style="font-size:12px;color:var(--t3)">${ch.type==='голос'?'🔊':'#'}</span>
+      <span style="font-size:11px;color:var(--t2);flex:1">${esc(ch.name)}</span>
+      <span style="font-size:9px;color:var(--t3);padding:1px 5px;background:var(--bg4);border-radius:2px">${ch.type}</span>
+      <button onclick="removeSrvChannel(${_activeSec},${ci})" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:11px;padding:0 2px" title="Удалить канал">✕</button>
+    </div>`).join('') : '';
+
+  const addChRow=activeSec ? `
+    <div style="display:flex;gap:6px;margin-top:10px;align-items:center;">
+      <input class="modal-inp" id="ch-inp-new" placeholder="название-канала" style="flex:1;padding:7px 9px;font-size:11px">
+      <select class="modal-inp" id="ch-type-new" style="width:88px;padding:7px 6px;font-size:10px;flex-shrink:0">
+        <option value="текст">текст</option>
+        <option value="голос">голос</option>
+        <option value="объявл.">объявл.</option>
+      </select>
+      <button class="act-btn" onclick="addSrvChannel()" style="margin:0;padding:6px 10px">+</button>
+    </div>` : `<div style="font-size:11px;color:var(--t3);margin-top:12px">Выбери или создай раздел слева</div>`;
+
+  showModal('Настройка сервера',`
+    <div class="modal-lbl" style="margin-top:0">Название сервера</div>
+    <input class="modal-inp" id="srv-name-build" placeholder="${_srvBuilderCtx&&_srvBuilderCtx.type==='fsc'?'Например: 8Б — класс':'Например: Общий чат'}" value="${esc(s.name)}">
+    <div style="margin-top:16px;display:flex;gap:0;border:1px solid var(--border2);min-height:240px;max-height:340px;">
+      <!-- LEFT: sections -->
+      <div style="width:140px;flex-shrink:0;background:var(--bg3);border-right:1px solid var(--border2);display:flex;flex-direction:column;padding:8px 6px;overflow-y:auto;">
+        <div style="font-size:8px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;padding:4px 6px 8px">Разделы</div>
+        ${leftSecs||'<div style="font-size:10px;color:var(--t3);padding:4px 6px">Нет разделов</div>'}
+        <button onclick="addSrvSection()" style="margin-top:auto;background:none;border:1px dashed var(--border2);color:var(--t3);font-family:var(--mono);font-size:10px;padding:5px;cursor:pointer;width:100%;transition:border-color .15s;letter-spacing:.04em" onmouseover="this.style.borderColor='var(--ac)';this.style.color='var(--ac)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--t3)'">+ раздел</button>
+      </div>
+      <!-- RIGHT: channels -->
+      <div style="flex:1;background:var(--bg2);padding:10px 12px;overflow-y:auto;">
+        ${activeSec?'<div style="font-size:9px;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">'+esc(activeSec.name)+'</div>':''}
+        ${rightChannels||'<div style="font-size:11px;color:var(--t3)">Каналов нет</div>'}
+        ${addChRow}
+      </div>
+    </div>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Создать сервер',cls:'primary',fn:finishServerBuild}
+  ]);
+}
+
+function selectSrvSec(si){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  _activeSec=si;
+  showSrvBuilder();
+}
+
+function addSrvSection(){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  showModal('Новый раздел',`
+    <div class="modal-lbl">Название раздела</div>
+    <input class="modal-inp" id="new-sec-inp" placeholder="Например: Общее">
+  `,[
+    {label:'Назад',cls:'',fn:showSrvBuilder},
+    {label:'Добавить',cls:'primary',fn:()=>{
+      const v=document.getElementById('new-sec-inp').value.trim();
+      if(!v){ toast('Введи название',true); return; }
+      _buildSrv.sections.push({name:v,channels:[]});
+      _activeSec=_buildSrv.sections.length-1;
+      showSrvBuilder();
+    }}
+  ]);
+}
+
+function editSecName(si){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  showModal('Переименовать раздел',`
+    <div class="modal-lbl">Название</div>
+    <input class="modal-inp" id="edit-sec-inp" value="${esc(_buildSrv.sections[si].name)}">
+    <div style="margin-top:14px">
+      <button class="act-btn danger" onclick="removeSrvSection(${si})" style="width:100%;margin:0;text-align:center">Удалить раздел</button>
+    </div>
+  `,[
+    {label:'Назад',cls:'',fn:showSrvBuilder},
+    {label:'Сохранить',cls:'primary',fn:()=>{
+      const v=document.getElementById('edit-sec-inp').value.trim();
+      if(!v){ toast('Введи название',true); return; }
+      _buildSrv.sections[si].name=v;
+      showSrvBuilder();
+    }}
+  ]);
+}
+
+function editChName(si,ci){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  const ch=_buildSrv.sections[si].channels[ci];
+  showModal('Редактировать канал',`
+    <div class="modal-lbl">Название канала</div>
+    <input class="modal-inp" id="edit-ch-inp" value="${esc(ch.name)}">
+    <div class="modal-lbl">Тип</div>
+    <select class="modal-inp modal-select" id="edit-ch-type">
+      <option ${ch.type==='текст'?'selected':''}>текст</option>
+      <option ${ch.type==='голос'?'selected':''}>голос</option>
+      <option ${ch.type==='объявл.'?'selected':''}>объявл.</option>
+    </select>
+    <div style="margin-top:14px">
+      <button class="act-btn danger" onclick="removeSrvChannel(${si},${ci})" style="width:100%;margin:0;text-align:center">Удалить канал</button>
+    </div>
+  `,[
+    {label:'Назад',cls:'',fn:showSrvBuilder},
+    {label:'Сохранить',cls:'primary',fn:()=>{
+      const n=document.getElementById('edit-ch-inp').value.trim();
+      const t=document.getElementById('edit-ch-type').value;
+      if(!n){ toast('Введи название',true); return; }
+      _buildSrv.sections[si].channels[ci]={name:n,type:t};
+      showSrvBuilder();
+    }}
+  ]);
+}
+
+function removeSrvSection(si){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  _buildSrv.sections.splice(si,1);
+  _activeSec=Math.min(_activeSec,_buildSrv.sections.length-1);
+  if(_activeSec<0) _activeSec=0;
+  showSrvBuilder();
+}
+
+function addSrvChannel(){
+  const nameEl=document.getElementById('ch-inp-new');
+  const typeEl=document.getElementById('ch-type-new');
+  const srvNameEl=document.getElementById('srv-name-build');
+  if(!nameEl||!nameEl.value.trim()){ toast('Введи название канала',true); return; }
+  if(srvNameEl) _buildSrv.name=srvNameEl.value;
+  _buildSrv.sections[_activeSec].channels.push({name:nameEl.value.trim(),type:typeEl?typeEl.value:'текст'});
+  showSrvBuilder();
+}
+
+function removeSrvChannel(si,ci){
+  const nameEl=document.getElementById('srv-name-build');
+  if(nameEl) _buildSrv.name=nameEl.value;
+  _buildSrv.sections[si].channels.splice(ci,1);
+  _activeSec=si;
+  showSrvBuilder();
+}
+
+function finishServerBuild(){
+  const nameEl=document.getElementById('srv-name-build');
+  const name=nameEl?nameEl.value.trim():'';
+  if(!name){ toast('Введи название сервера',true); return; }
+  _buildSrv.name=name;
+  const ctx=_srvBuilderCtx;
+  const orgName=ctx.orgName||'FO';
+  const newSrv={
+    id:uid(), name, org:orgName,
+    type: ctx.type==='fsc'?'FSC':'FO',
+    sections:JSON.parse(JSON.stringify(_buildSrv.sections)),
+    status:'active', created:nowDate()
+  };
+  STATE.foServers.push(newSrv);
+  if(ctx.type==='org'){
+    STATE.orgs[ctx.orgIdx].servers.push({id:newSrv.id,name,type:'FO'});
+    renderOrgs();
+  } else if(ctx.type==='fsc'){
+    STATE.schools[ctx.schIdx].classes[ctx.clsIdx].servers=STATE.schools[ctx.schIdx].classes[ctx.clsIdx].servers||[];
+    STATE.schools[ctx.schIdx].classes[ctx.clsIdx].servers.push({id:newSrv.id,name});
+    renderFSC();
+  }
+  addLog(`Сервер «${name}» создан (${newSrv.id})`);
+  updateStats(); updateBadges(); renderFOServers();
+  M.close(); toast(`Сервер «${name}» создан`);
+  _buildSrv=null; _srvBuilderCtx=null;
+}
+
+// ── EDIT FO SERVER (long press in server list) ──
+function openEditFOServer(id){
+  const s=STATE.foServers.find(x=>x.id===id);
+  if(!s) return;
+  _buildSrv=JSON.parse(JSON.stringify({name:s.name,sections:s.sections||[]}));
+  _srvBuilderCtx={editId:id};
+  _activeSec=0;
+  showSrvBuilderEdit(id);
+}
+
+function showSrvBuilderEdit(id){
+  const s=_buildSrv;
+  _srvBuilderCtx={editId:id};
+  const activeSec=s.sections[_activeSec];
+
+  const leftSecs=s.sections.map((sec,si)=>`
+    <div onclick="selectSrvSecEdit(${si},'${id}')" style="
+      display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;border-radius:3px;
+      background:${si===_activeSec?'var(--bg4)':'transparent'};
+      border-left:2px solid ${si===_activeSec?'var(--ac)':'transparent'};
+      margin-bottom:2px;user-select:none;"
+      onmousedown="lpStart(event,()=>editSecNameEdit(${si},'${id}'))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editSecNameEdit(${si},'${id}'))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <span style="font-size:11px;color:${si===_activeSec?'var(--t)':'var(--t2)'};flex:1">${esc(sec.name)}</span>
+      <button onclick="event.stopPropagation();removeSrvSectionEdit(${si},'${id}')" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:11px;padding:0 2px">✕</button>
+    </div>`).join('');
+
+  const rightChannels=activeSec?activeSec.channels.map((ch,ci)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:3px;background:var(--bg3);margin-bottom:4px;"
+      onmousedown="lpStart(event,()=>editChNameEdit(${_activeSec},${ci},'${id}'))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editChNameEdit(${_activeSec},${ci},'${id}'))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <span style="font-size:12px;color:var(--t3)">${ch.type==='голос'?'🔊':'#'}</span>
+      <span style="font-size:11px;color:var(--t2);flex:1">${esc(ch.name)}</span>
+      <span style="font-size:9px;color:var(--t3);padding:1px 5px;background:var(--bg4);border-radius:2px">${ch.type}</span>
+      <button onclick="removeSrvChannelEdit(${_activeSec},${ci},'${id}')" style="background:none;border:none;color:var(--t3);cursor:pointer;font-size:11px;padding:0 2px">✕</button>
+    </div>`).join(''):'';
+
+  const addChRow=activeSec?`
+    <div style="display:flex;gap:6px;margin-top:10px;align-items:center;">
+      <input class="modal-inp" id="ech-inp-new" placeholder="название-канала" style="flex:1;padding:7px 9px;font-size:11px">
+      <select class="modal-inp" id="ech-type-new" style="width:88px;padding:7px 6px;font-size:10px;flex-shrink:0">
+        <option value="текст">текст</option>
+        <option value="голос">голос</option>
+        <option value="объявл.">объявл.</option>
+      </select>
+      <button class="act-btn" onclick="addSrvChannelEdit('${id}')" style="margin:0;padding:6px 10px">+</button>
+    </div>`:`<div style="font-size:11px;color:var(--t3);margin-top:12px">Выбери или создай раздел слева</div>`;
+
+  showModal('Редактировать сервер',`
+    <div class="modal-lbl" style="margin-top:0">Название сервера</div>
+    <input class="modal-inp" id="esrv-name-build" value="${esc(s.name)}">
+    <div style="margin-top:16px;display:flex;gap:0;border:1px solid var(--border2);min-height:220px;max-height:320px;">
+      <div style="width:140px;flex-shrink:0;background:var(--bg3);border-right:1px solid var(--border2);display:flex;flex-direction:column;padding:8px 6px;overflow-y:auto;">
+        <div style="font-size:8px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;padding:4px 6px 8px">Разделы</div>
+        ${leftSecs||'<div style="font-size:10px;color:var(--t3);padding:4px 6px">Нет разделов</div>'}
+        <button onclick="addSrvSectionEdit('${id}')" style="margin-top:auto;background:none;border:1px dashed var(--border2);color:var(--t3);font-family:var(--mono);font-size:10px;padding:5px;cursor:pointer;width:100%;letter-spacing:.04em" onmouseover="this.style.borderColor='var(--ac)';this.style.color='var(--ac)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--t3)'">+ раздел</button>
+      </div>
+      <div style="flex:1;background:var(--bg2);padding:10px 12px;overflow-y:auto;">
+        ${activeSec?'<div style="font-size:9px;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">'+esc(activeSec.name)+'</div>':''}
+        ${rightChannels||'<div style="font-size:11px;color:var(--t3)">Каналов нет</div>'}
+        ${addChRow}
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="act-btn danger" onclick="deleteFOServer('${id}')" style="width:100%;margin:0;text-align:center;padding:8px">Удалить сервер</button>
+    </div>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Сохранить',cls:'primary',fn:()=>saveServerEdit(id)}
+  ]);
+}
+
+function selectSrvSecEdit(si,id){ const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value; _activeSec=si; showSrvBuilderEdit(id); }
+function addSrvSectionEdit(id){
+  const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value;
+  showModal('Новый раздел',`<div class="modal-lbl">Название раздела</div><input class="modal-inp" id="new-sec-inp2" placeholder="Например: Общее">`,[
+    {label:'Назад',cls:'',fn:()=>showSrvBuilderEdit(id)},
+    {label:'Добавить',cls:'primary',fn:()=>{
+      const v=document.getElementById('new-sec-inp2').value.trim(); if(!v){ toast('Введи название',true); return; }
+      _buildSrv.sections.push({name:v,channels:[]}); _activeSec=_buildSrv.sections.length-1; showSrvBuilderEdit(id);
+    }}
+  ]);
+}
+function editSecNameEdit(si,id){
+  const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value;
+  showModal('Переименовать раздел',`<div class="modal-lbl">Название</div><input class="modal-inp" id="esec-inp" value="${esc(_buildSrv.sections[si].name)}"><div style="margin-top:14px"><button class="act-btn danger" onclick="removeSrvSectionEdit(${si},'${id}')" style="width:100%;margin:0;text-align:center">Удалить раздел</button></div>`,[
+    {label:'Назад',cls:'',fn:()=>showSrvBuilderEdit(id)},
+    {label:'Сохранить',cls:'primary',fn:()=>{ const v=document.getElementById('esec-inp').value.trim(); if(!v){ toast('Введи название',true); return; } _buildSrv.sections[si].name=v; showSrvBuilderEdit(id); }}
+  ]);
+}
+function editChNameEdit(si,ci,id){
+  const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value;
+  const ch=_buildSrv.sections[si].channels[ci];
+  showModal('Редактировать канал',`<div class="modal-lbl">Название</div><input class="modal-inp" id="ech-inp-edit" value="${esc(ch.name)}"><div class="modal-lbl">Тип</div><select class="modal-inp modal-select" id="ech-type-edit"><option ${ch.type==='текст'?'selected':''}>текст</option><option ${ch.type==='голос'?'selected':''}>голос</option><option ${ch.type==='объявл.'?'selected':''}>объявл.</option></select><div style="margin-top:14px"><button class="act-btn danger" onclick="removeSrvChannelEdit(${si},${ci},'${id}')" style="width:100%;margin:0;text-align:center">Удалить канал</button></div>`,[
+    {label:'Назад',cls:'',fn:()=>showSrvBuilderEdit(id)},
+    {label:'Сохранить',cls:'primary',fn:()=>{ const n=document.getElementById('ech-inp-edit').value.trim(),t=document.getElementById('ech-type-edit').value; if(!n){ toast('Введи название',true); return; } _buildSrv.sections[si].channels[ci]={name:n,type:t}; showSrvBuilderEdit(id); }}
+  ]);
+}
+function removeSrvSectionEdit(si,id){ const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value; _buildSrv.sections.splice(si,1); _activeSec=Math.max(0,Math.min(_activeSec,_buildSrv.sections.length-1)); showSrvBuilderEdit(id); }
+function addSrvChannelEdit(id){ const n=document.getElementById('ech-inp-new'),t=document.getElementById('ech-type-new'),sn=document.getElementById('esrv-name-build'); if(!n||!n.value.trim()){ toast('Введи название канала',true); return; } if(sn) _buildSrv.name=sn.value; _buildSrv.sections[_activeSec].channels.push({name:n.value.trim(),type:t?t.value:'текст'}); showSrvBuilderEdit(id); }
+function removeSrvChannelEdit(si,ci,id){ const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value; _buildSrv.sections[si].channels.splice(ci,1); _activeSec=si; showSrvBuilderEdit(id); }
+function saveServerEdit(id){
+  const nameEl=document.getElementById('esrv-name-build'); const name=nameEl?nameEl.value.trim():''; if(!name){ toast('Введи название',true); return; }
+  const s=STATE.foServers.find(x=>x.id===id); if(!s) return;
+  s.name=name; s.sections=JSON.parse(JSON.stringify(_buildSrv.sections));
+  addLog(`Сервер «${name}» обновлён`); renderFOServers(); M.close(); toast('Сохранено');
+}
+function deleteFOServer(id){
+  showConfirm('Удалить сервер?','Сервер и все его данные будут удалены.',()=>{
+    const s=STATE.foServers.find(x=>x.id===id);
+    if(s) addLog(`Сервер «${s.name}» удалён`);
+    STATE.foServers=STATE.foServers.filter(x=>x.id!==id);
+    STATE.banned=STATE.banned.filter(b=>b.id!==id);
+    updateStats(); updateBadges(); renderFOServers(); M.close(); toast('Сервер удалён');
+  });
+}
+
+// ── FO ORGS ──
+function renderOrgs(){
+  const box=document.getElementById('orgs-list');
+  if(!STATE.orgs.length){ box.innerHTML='<div class="empty">Организаций нет</div>'; return; }
+  box.innerHTML=STATE.orgs.map((org,i)=>`
+    <div class="org-card" id="org-card-${i}"
+      onclick="toggleOrg(${i})"
+      onmousedown="lpStart(event,()=>editOrg(${i}))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editOrg(${i}))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <div class="org-icon">🏢</div>
+      <div style="flex:1;min-width:0;">
+        <div class="org-name">${esc(org.name)}</div>
+        <div class="org-meta">${org.servers.length} сервер(ов) · ${org.type} · ${org.created}</div>
+      </div>
+      <span class="chip fo">FO</span>
+      <svg class="org-expand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="org-children" id="org-children-${i}">
+      ${org.servers.map((srv,j)=>`
+        <div class="server-row">
+          <div style="flex:1">
+            <div class="server-name">${esc(srv.name)}</div>
+            <div class="server-meta">ID: ${srv.id||'—'} · ${srv.type}</div>
+          </div>
+          <button class="act-btn danger" onclick="event.stopPropagation();removeOrgServer(${i},${j})" style="margin:0">Удалить</button>
+        </div>`).join('')||'<div style="font-size:11px;color:var(--t3);padding:8px 0">Серверов нет</div>'}
+      <button class="sec-btn" style="margin-top:8px;font-size:10px" onclick="event.stopPropagation();openServerBuilder({type:'org',orgIdx:${i},orgName:'${org.name.replace(/'/g,"\\'")}'})">+ Создать сервер</button>
+    </div>
+  `).join('');
+}
+function toggleOrg(i){
+  const card=document.getElementById('org-card-'+i);
+  const ch=document.getElementById('org-children-'+i);
+  card.classList.toggle('open'); ch.classList.toggle('on');
+}
+function editOrg(i){
+  const org=STATE.orgs[i];
+  showModal('Редактировать организацию',`
+    <div class="modal-lbl">Название</div>
+    <input class="modal-inp" id="edit-org-name" value="${esc(org.name)}">
+    <div class="modal-lbl">Тип</div>
+    <select class="modal-inp modal-select" id="edit-org-type">
+      <option ${org.type==='company'?'selected':''}>company</option>
+      <option ${org.type==='school'?'selected':''}>school</option>
+      <option ${org.type==='other'?'selected':''}>other</option>
+    </select>
+    <div style="margin-top:16px">
+      <button class="act-btn danger" onclick="deleteOrg(${i})" style="width:100%;margin:0;text-align:center;padding:8px">Удалить организацию</button>
+    </div>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Сохранить',cls:'primary',fn:()=>{
+      const n=document.getElementById('edit-org-name').value.trim();
+      const t=document.getElementById('edit-org-type').value;
+      if(!n){ toast('Введи название',true); return; }
+      STATE.orgs[i].name=n; STATE.orgs[i].type=t;
+      addLog(`Организация переименована → ${n}`);
+      renderOrgs(); M.close(); toast('Сохранено');
+    }}
+  ]);
+}
+function deleteOrg(i){
+  showConfirm('Удалить организацию?','Все серверы организации останутся в общем списке.',()=>{
+    addLog(`Организация «${STATE.orgs[i].name}» удалена`);
+    STATE.orgs.splice(i,1);
+    updateStats(); renderOrgs(); toast('Организация удалена');
+  });
+}
+function openAddOrgModal(){
+  showModal('Новая организация',`
+    <div class="modal-lbl">Название организации</div>
+    <input class="modal-inp" id="org-name-inp" placeholder="ООО Пример">
+    <div class="modal-lbl">Тип</div>
+    <select class="modal-select modal-inp" id="org-type-sel">
+      <option value="company">Компания</option>
+      <option value="school">Школа</option>
+      <option value="other">Другое</option>
+    </select>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Создать',cls:'primary',fn:doAddOrg}
+  ]);
+}
+function doAddOrg(){
+  const name=document.getElementById('org-name-inp').value.trim();
+  if(!name){ toast('Введите название',true); return; }
+  const type=document.getElementById('org-type-sel').value;
+  STATE.orgs.push({name,type,servers:[],created:nowDate()});
+  addLog(`Организация «${name}» создана`);
+  updateStats(); renderOrgs(); M.close(); toast('Организация создана');
+}
+function removeOrgServer(i,j){
+  STATE.orgs[i].servers.splice(j,1); renderOrgs();
+}
+
+// ── FSC ──
+function renderFSC(){
+  const box=document.getElementById('fsc-list');
+  if(!STATE.schools.length){ box.innerHTML='<div class="empty">Школ нет</div>'; return; }
+  box.innerHTML=STATE.schools.map((sch,i)=>`
+    <div class="org-card" id="sch-card-${i}"
+      onclick="toggleSch(${i})"
+      onmousedown="lpStart(event,()=>editSchool(${i}))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+      ontouchstart="lpStart(event,()=>editSchool(${i}))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+      <div class="org-icon">🏫</div>
+      <div style="flex:1;min-width:0;">
+        <div class="org-name">${esc(sch.name)}</div>
+        <div class="org-meta">${sch.classes.length} класс(ов) · ${sch.city} · ${sch.created}</div>
+      </div>
+      <span class="chip school">FSC</span>
+      <svg class="org-expand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="org-children" id="sch-children-${i}">
+      ${sch.classes.map((cls,j)=>`
+        <div class="server-row" style="flex-wrap:wrap;gap:6px;"
+          onmousedown="lpStart(event,()=>editClass(${i},${j}))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
+          ontouchstart="lpStart(event,()=>editClass(${i},${j}))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+          <div style="flex:1;min-width:120px;">
+            <div class="server-name">${esc(cls.name)}</div>
+            <div class="server-meta">${cls.students.length} уч. · ${esc(cls.teacher||'—')}${cls.teacherId?' · <span onclick="copyId(\''+cls.teacherId+'\')" title="Скопировать ID учителя" style="color:var(--ac);cursor:pointer;border-bottom:1px dashed var(--ac)">'+cls.teacherId+'</span>':''}</div>
+          </div>
+          <button class="act-btn" onclick="event.stopPropagation();openClassPanel(${i},${j})">Ученики</button>
+          <button class="act-btn" onclick="event.stopPropagation();openServerBuilder({type:'fsc',schIdx:${i},clsIdx:${j},orgName:'${esc(sch.name)}'})" >+ Сервер</button>
+          <button class="act-btn danger" onclick="event.stopPropagation();archiveClass(${i},${j})">Архив</button>
+        </div>
+      `).join('')||'<div style="font-size:11px;color:var(--t3);padding:8px 0">Классов нет</div>'}
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button class="sec-btn" style="font-size:10px" onclick="event.stopPropagation();addClassToSch(${i})">+ Добавить класс</button>
+        <button class="act-btn danger" onclick="event.stopPropagation();deleteSchool(${i})">Удалить школу</button>
+      </div>
+    </div>
+  `).join('');
+}
+function toggleSch(i){
+  const card=document.getElementById('sch-card-'+i);
+  const ch=document.getElementById('sch-children-'+i);
+  card.classList.toggle('open'); ch.classList.toggle('on');
+}
+function editSchool(i){
+  const sch=STATE.schools[i];
+  showModal('Редактировать школу',`
+    <div class="modal-lbl">Название</div>
+    <input class="modal-inp" id="edit-sch-name" value="${esc(sch.name)}">
+    <div class="modal-lbl">Город</div>
+    <input class="modal-inp" id="edit-sch-city" value="${esc(sch.city||'')}">
+    <div style="margin-top:16px">
+      <button class="act-btn danger" onclick="deleteSchool(${i})" style="width:100%;margin:0;text-align:center;padding:8px">Удалить школу</button>
+    </div>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Сохранить',cls:'primary',fn:()=>{
+      const n=document.getElementById('edit-sch-name').value.trim();
+      const c=document.getElementById('edit-sch-city').value.trim();
+      if(!n){ toast('Введи название',true); return; }
+      STATE.schools[i].name=n; STATE.schools[i].city=c||'—';
+      addLog(`Школа переименована → ${n}`);
+      renderFSC(); M.close(); toast('Сохранено');
+    }}
+  ]);
+}
+function editClass(i,j){
+  const cls=STATE.schools[i].classes[j];
+  showModal('Редактировать класс',`
+    <div class="modal-lbl">Название класса</div>
+    <input class="modal-inp" id="edit-cls-name" value="${esc(cls.name)}">
+    <div class="modal-lbl">Учитель</div>
+    <input class="modal-inp" id="edit-cls-teacher" value="${esc(cls.teacher||'')}">
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Сохранить',cls:'primary',fn:()=>{
+      const n=document.getElementById('edit-cls-name').value.trim();
+      const t=document.getElementById('edit-cls-teacher').value.trim();
+      if(!n){ toast('Введи название',true); return; }
+      STATE.schools[i].classes[j].name=n;
+      STATE.schools[i].classes[j].teacher=t||'—';
+      addLog(`Класс переименован → ${n}`);
+      renderFSC(); M.close(); toast('Сохранено');
+    }}
+  ]);
+}
+function deleteSchool(i){
+  showConfirm('Удалить школу?','Все классы и их серверы будут удалены.',()=>{
+    addLog(`Школа «${STATE.schools[i].name}» удалена`);
+    STATE.schools.splice(i,1);
+    updateStats(); renderFSC(); toast('Школа удалена');
+  });
+}
+function openAddSchoolModal(){
+  showModal('Добавить школу',`
+    <div class="modal-lbl">Название школы</div>
+    <input class="modal-inp" id="sch-name-inp" placeholder="МБОУ СОШ №1">
+    <div class="modal-lbl">Город</div>
+    <input class="modal-inp" id="sch-city-inp" placeholder="Москва">
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Добавить',cls:'primary',fn:doAddSchool}
+  ]);
+}
+function doAddSchool(){
+  const name=document.getElementById('sch-name-inp').value.trim();
+  if(!name){ toast('Введите название',true); return; }
+  const city=document.getElementById('sch-city-inp').value.trim()||'—';
+  STATE.schools.push({name,city,classes:[],created:nowDate()});
+  STATE.orgs.push({name,type:'school',servers:[],created:nowDate()});
+  addLog(`Школа «${name}» добавлена в FSC`);
+  updateStats(); renderFSC(); renderOrgs(); M.close(); toast('Школа добавлена');
+}
+function addClassToSch(i){
+  showModal('Добавить класс',`
+    <div class="modal-lbl">Название класса (напр. 8Б)</div>
+    <input class="modal-inp" id="cls-name-inp" placeholder="8Б">
+    <div class="modal-lbl">ФИО учителя</div>
+    <input class="modal-inp" id="cls-teacher-inp" placeholder="Иванова А.П.">
+    <div style="font-size:10px;color:var(--t3);margin-top:6px;letter-spacing:.04em">Учителю будет автоматически создан ID для входа</div>
+  `,[
+    {label:'Отмена',cls:'',fn:M.close},
+    {label:'Создать',cls:'primary',fn:()=>{
+      const name=document.getElementById('cls-name-inp').value.trim();
+      const teacher=document.getElementById('cls-teacher-inp').value.trim()||'—';
+      if(!name){ toast('Введите название',true); return; }
+      const teacherId='MRV-T-'+gid6();
+      // Auto-create a class server and add to foServers
+      const srvId=uid();
+      const srvName=name+' — '+STATE.schools[i].name;
+      const newSrv={
+        id:srvId, name:srvName, org:STATE.schools[i].name,
+        type:'FSC', sections:[
+          {name:'ОБЩЕЕ',channels:[{name:'общий',type:'текст'},{name:'объявления',type:'объявл.'}]},
+          {name:'УЧЁБА',channels:[{name:'домашнее-задание',type:'текст'}]}
+        ],
+        status:'active', created:nowDate()
+      };
+      STATE.foServers.push(newSrv);
+      STATE.schools[i].classes.push({
+        name, teacher, teacherId,
+        students:[], servers:[{id:srvId,name:srvName}],
+        school:STATE.schools[i].name, added:nowDate()
+      });
+      addLog(`Класс ${name} добавлен · Учитель: ${teacher} (${teacherId}) · Сервер: ${srvId}`);
+      updateStats(); updateBadges(); renderFSC(); renderFOServers();
+      M.close();
+      toast(`Класс создан. ID учителя: ${teacherId}`);
+      // Show teacher ID prominently
+      showModal('Класс создан',`
+        <div style="font-size:12px;color:var(--t2);margin-bottom:14px">Сохраните ID учителя — он понадобится для входа.</div>
+        <div class="modal-lbl">Учитель</div>
+        <div style="font-size:13px;color:var(--t);padding:8px 0">${esc(teacher)}</div>
+        <div class="modal-lbl">ID учителя</div>
+        <div onclick="copyId('${teacherId}')" title="Нажми чтобы скопировать" style="font-size:16px;color:var(--ac);letter-spacing:.14em;font-family:var(--mono);padding:10px 12px;background:var(--bg3);border:1px solid var(--border2);cursor:pointer;user-select:all">${teacherId}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:6px">Нажми на ID чтобы скопировать</div>
+        <div class="modal-lbl">Сервер класса</div>
+        <div style="font-size:11px;color:var(--t2);padding:6px 0">${esc(srvName)} · <span style="color:var(--t3)">${srvId}</span></div>
+      `,[{label:'Закрыть',cls:'primary',fn:M.close}]);
+    }}
+  ]);
+}
+
+// ── CLASS PANEL (students + IDs) ──
+let _cps=-1,_cpc=-1;
+function openClassPanel(si,ci){ _cps=si; _cpc=ci; renderClassPanel(); }
+function renderClassPanel(){
+  const si=_cps,ci=_cpc;
+  const cls=STATE.schools[si].classes[ci];
+  const rows=cls.students.map((s,k)=>
+    '<tr>'+
+    '<td style="color:var(--t);font-size:12px">'+esc(s.surname)+'</td>'+
+    '<td style="font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--ac)">'+s.id+'</td>'+
+    '<td><span class="status '+(s.blocked?'banned':'active')+'">'+(s.blocked?'Заблок.':'Активен')+'</span></td>'+
+    '<td>'+
+      (!s.blocked
+        ?'<button class="act-btn danger" onclick="blockStudent('+si+','+ci+','+k+')">Бан</button>'
+        :'<button class="act-btn success" onclick="unblockStudent('+si+','+ci+','+k+')">Разбан</button>')+
+      '<button class="act-btn" onclick="regenId('+si+','+ci+','+k+')">Новый ID</button>'+
+      '<button class="act-btn danger" onclick="removeStudent('+si+','+ci+','+k+')" style="margin:0">✕</button>'+
+    '</td>'+
+    '</tr>'
+  ).join('');
+  showModal(`Класс ${esc(cls.name)} — ученики`,`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="font-size:10px;color:var(--t3)">${cls.students.length} уч. · Учитель: ${esc(cls.teacher||'—')}</div>
+      <button class="act-btn" onclick="openAddStudentModal(${si},${ci})" style="margin:0">+ Добавить</button>
+    </div>
+    ${cls.students.length?'<div style="overflow-x:auto;max-height:300px;overflow-y:auto;"><table class="tbl" style="margin:0"><thead><tr><th>Фамилия</th><th>ID</th><th>Статус</th><th>Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="empty" style="padding:20px 0">Учеников нет.</div>'}
+  `,[{label:'Закрыть',cls:'',fn:M.close}]);
+}
+function openAddStudentModal(si,ci){
+  showModal('Добавить ученика',`
+    <div class="modal-lbl">Фамилия ученика</div>
+    <input class="modal-inp" id="st-surname-inp" placeholder="Иванов">
+    <div style="font-size:10px;color:var(--t3);margin-top:10px;letter-spacing:.04em">ID генерируется автоматически — формат MRV-XXXXXX</div>
+  `,[
+    {label:'Отмена',cls:'',fn:()=>openClassPanel(si,ci)},
+    {label:'Добавить',cls:'primary',fn:()=>{
+      const surname=document.getElementById('st-surname-inp').value.trim();
+      if(!surname){ toast('Введите фамилию',true); return; }
+      const id='MRV-'+gid6();
+      STATE.schools[si].classes[ci].students.push({surname,id,blocked:false});
+      addLog(`Ученик ${surname} (${id}) добавлен в ${STATE.schools[si].classes[ci].name}`);
+      renderFSC(); openClassPanel(si,ci); toast(`ID создан: ${id}`);
+    }}
+  ]);
+}
+function blockStudent(si,ci,k){
+  STATE.schools[si].classes[ci].students[k].blocked=true;
+  addLog(`ID ${STATE.schools[si].classes[ci].students[k].id} заблокирован`);
+  renderFSC(); renderClassPanel(); toast('ID заблокирован');
+}
+function unblockStudent(si,ci,k){
+  STATE.schools[si].classes[ci].students[k].blocked=false;
+  addLog(`ID ${STATE.schools[si].classes[ci].students[k].id} разблокирован`);
+  renderFSC(); renderClassPanel(); toast('ID разблокирован');
+}
+function regenId(si,ci,k){
+  const old=STATE.schools[si].classes[ci].students[k].id;
+  const nw='MRV-'+gid6();
+  STATE.schools[si].classes[ci].students[k].id=nw;
+  addLog(`ID пересоздан: ${old} → ${nw}`);
+  renderFSC(); renderClassPanel(); toast(`Новый ID: ${nw}`);
+}
+function removeStudent(si,ci,k){
+  const s=STATE.schools[si].classes[ci].students[k];
+  STATE.schools[si].classes[ci].students.splice(k,1);
+  addLog(`Ученик ${s.surname} удалён`);
+  renderFSC(); renderClassPanel(); toast('Ученик удалён');
+}
+
+function archiveClass(i,j){
+  const cls=STATE.schools[i].classes[j];
+  const year=new Date().getFullYear();
+  STATE.archive.push({...cls,studentCount:cls.students.length,archivedYear:year,archivedDate:nowDate()});
+  STATE.schools[i].classes.splice(j,1);
+  addLog(`Класс ${cls.name} отправлен в архив`);
+  renderFSC(); renderArchive(); toast('Класс архивирован');
+}
+
+// ── ARCHIVE ──
+function renderArchive(){
+  const box=document.getElementById('archive-list');
+  if(!STATE.archive.length){ box.innerHTML='<div class="empty">Архивированных классов нет</div>'; return; }
+  const byYear={};
+  STATE.archive.forEach(c=>{ if(!byYear[c.archivedYear]) byYear[c.archivedYear]=[]; byYear[c.archivedYear].push(c); });
+  box.innerHTML=Object.keys(byYear).sort((a,b)=>b-a).map(yr=>`
+    <div class="archive-year">
+      <div class="archive-year-hd">Выпуск ${yr}</div>
+      ${byYear[yr].map(c=>`
+        <div class="archive-class">
+          <div class="archive-class-name">${esc(c.name)} · ${esc(c.school||'—')}</div>
+          <div class="archive-class-meta">${c.studentCount||0} уч.</div>
+          <span class="archive-badge">READ ONLY</span>
+          <span class="archive-badge" style="margin-left:4px">${c.archivedDate}</span>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+// ── MODAL ──
+const M={
+  show(title,body,actions){
+    document.getElementById('modal-title').textContent=title;
+    document.getElementById('modal-body').innerHTML=body;
+    const actEl=document.getElementById('modal-actions');
+    actEl.innerHTML='';
+    (actions||[]).forEach(a=>{
+      const btn=document.createElement('button');
+      btn.className='modal-btn '+(a.cls||'');
+      btn.textContent=a.label;
+      btn.addEventListener('click',a.fn);
+      actEl.appendChild(btn);
+    });
+    document.getElementById('modal-bg').classList.add('on');
+  },
+  close(){ document.getElementById('modal-bg').classList.remove('on'); }
+};
+// alias
+function showModal(t,b,a){ M.show(t,b,a); }
+function _closeModal(){ M.close(); }
+function closeModal(e){
+  if(e&&e.target!==document.getElementById('modal-bg')) return;
+  M.close();
+}
+
+// ── CONFIRM ──
+let _confirmCb=null;
+function showConfirm(title,txt,cb){
+  document.getElementById('confirm-title').textContent=title;
+  document.getElementById('confirm-txt').textContent=txt;
+  _confirmCb=cb;
+  document.getElementById('confirm-bg').classList.add('on');
+}
+function closeConfirm(){ document.getElementById('confirm-bg').classList.remove('on'); _confirmCb=null; }
+document.getElementById('confirm-ok').addEventListener('click',function(){
+  closeConfirm();
+  if(_confirmCb) _confirmCb();
+});
+
+// ── TOAST ──
+let _toastT=null;
+function toast(msg,err=false){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.className='on'+(err?' err':'');
+  clearTimeout(_toastT);
+  _toastT=setTimeout(()=>el.className='',2500);
+}
+
+// ── INIT ──
+document.getElementById('pwdInp').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+</script>
+</body>
+</html>
