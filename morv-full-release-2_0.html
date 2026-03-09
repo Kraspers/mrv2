@@ -1795,6 +1795,48 @@ function toast(m){
 const openSh=id=>document.getElementById(id).classList.add('on');
 const closeSh=id=>document.getElementById(id).classList.remove('on');
 
+const API={
+  token: localStorage.getItem('morv_token')||'',
+  deviceCode: localStorage.getItem('morv_device_code')||gid(24),
+};
+localStorage.setItem('morv_device_code',API.deviceCode);
+
+async function apiReq(path, opts={}){
+  const headers=Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(opts.auth&&API.token) headers.Authorization='Bearer '+API.token;
+  const res=await fetch(path,{method:opts.method||'GET',headers,body:opts.body?JSON.stringify(opts.body):undefined});
+  let data={};
+  try{data=await res.json();}catch(e){}
+  if(!res.ok){
+    const err=new Error(data.error||('HTTP '+res.status));
+    err.status=res.status; err.data=data;
+    throw err;
+  }
+  return data;
+}
+
+async function ensureSession(){
+  if(API.token) return API.token;
+  const data=await apiReq('/api/auth/device',{method:'POST',body:{deviceCode:API.deviceCode}});
+  API.token=data.token||'';
+  if(API.token) localStorage.setItem('morv_token',API.token);
+  if(data.user&&data.user.name){
+    $.me={id:data.user.id,name:data.user.name,emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
+  }
+  return API.token;
+}
+
+async function getMyServerById(serverId){
+  await ensureSession();
+  const data=await apiReq('/api/servers',{auth:true});
+  return (data.servers||[]).find(s=>s.id===serverId)||null;
+}
+
+function routeToServer(serverId){
+  const u='/servers/'+serverId;
+  if(location.pathname!==u) history.replaceState({},'',u);
+}
+
 // ── Boot ──
 function createServer(){
   document.getElementById('createSrvName').value='';
@@ -1816,17 +1858,39 @@ function previewSrvAva(inp){
   };
   reader.readAsDataURL(file);
 }
-function doCreateServer(){
+async function doCreateServer(){
   const nm=document.getElementById('createSrvName').value.trim();
   const name=nm||('phantom-'+gid(4));
-  closeSh('sh-create');
-  bootWithAva(gid(8),name,window._srvAvaData||null);
+  try{
+    await ensureSession();
+    const data=await apiReq('/api/servers',{method:'POST',auth:true,body:{name}});
+    closeSh('sh-create');
+    bootWithAva(data.server.id,data.server.name,window._srvAvaData||null,data.server);
+  }catch(e){
+    toast('Ошибка создания сервера');
+  }
 }
-function joinServer(){
+async function joinServer(){
   const v=document.getElementById('joinInput').value.trim();
   if(!v){document.getElementById('joinInput').focus();return;}
-  const m=v.match(/([a-z0-9]{8})$/);
-  boot(m?m[1]:gid(8),'phantom-'+gid(4));
+  try{
+    await ensureSession();
+    const inv=(v.match(/invite\/([a-z0-9]{10})/i)||v.match(/([a-z0-9]{10})$/i));
+    if(inv){
+      const j=await apiReq('/api/invites/'+inv[1]+'/join',{method:'POST',auth:true});
+      const srv=await getMyServerById(j.serverId);
+      if(!srv){ toast('Сервер не найден'); return; }
+      boot(srv.id,srv.name,srv); return;
+    }
+    const sid=(v.match(/servers\/([a-z0-9]{8})/i)||v.match(/([a-z0-9]{8})$/i));
+    if(!sid){ toast('Неверная ссылка'); return; }
+    const srv=await getMyServerById(sid[1]);
+    if(!srv){ toast('Сервер не найден'); return; }
+    boot(srv.id,srv.name,srv);
+  }catch(e){
+    if(e.status===404) toast('Сервер не найден');
+    else toast('Ошибка входа');
+  }
 }
 
 function openEditSrv(){
@@ -1883,28 +1947,43 @@ function doEditSrv(){
   toast('Сервер обновлён');
 }
 
-function bootWithAva(sid,snm,avaData){
+function bootWithAva(sid,snm,avaData,serverData){
   $.srvAva=avaData||null;
-  boot(sid,snm);
+  boot(sid,snm,serverData);
 }
 
-function boot(sid,snm){
+function boot(sid,snm,serverData=null){
   $.sid=sid; $.snm=snm;
-  $.me={id:gid(12),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
-  const [c1,c2,c3,c4]=[gid(),gid(),gid(),gid()];
-  $.cats=[{id:'g1',name:'ОБЩИЕ'},{id:'g2',name:'ГОЛОСОВЫЕ'}];
-  $.chs={
-    [c1]:{id:c1,name:'общий',type:'text',cat:'g1',desc:'Основной чат'},
-    [c2]:{id:c2,name:'оффтоп',type:'text',cat:'g1',desc:'Разговоры'},
-    [c3]:{id:c3,name:'лаунж',type:'voice',cat:'g2',desc:''},
-    [c4]:{id:c4,name:'работа',type:'voice',cat:'g2',desc:''},
-  };
-  $.msgs={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
-  $.unread={[c1]:0,[c2]:0,[c3]:0,[c4]:0};
-  $.pinned={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
+  if(!$.me||!$.me.id) $.me={id:gid(12),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
+  const srv=serverData||null;
+  $.cats=[];
+  $.chs={};
+  $.msgs={};
+  $.unread={};
+  $.pinned={};
   $.members=[$.me];
-  sysMsg(c1,'👻 Пространство создано. Поделитесь ссылкой.');
-  sysMsg(c1,'🔒 Сквозное шифрование. Без данных.');
+
+  if(srv){
+    const sections=(srv.sections||[]);
+    if(sections.length){
+      sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))}));
+    } else {
+      $.cats.push({id:'sec0',name:'КАНАЛЫ'});
+    }
+    Object.values(srv.channels||{}).forEach((ch,idx)=>{
+      const catId=$.cats[0]?$.cats[0].id:'sec0';
+      $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:''};
+      $.msgs[ch.id]=(ch.messages||[]).map(m=>({
+        id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),
+        text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}
+      }));
+      $.unread[ch.id]=0;
+      $.pinned[ch.id]=[];
+    });
+  }
+
+  localStorage.setItem('morv_last_server',sid);
+  routeToServer(sid);
 
   const avaEl=document.getElementById('srvAva');
   if($.srvAva){
@@ -1914,7 +1993,7 @@ function boot(sid,snm){
   }
   document.getElementById('srvNm').textContent=snm;
   document.getElementById('srvId').textContent='ID: '+sid;
-  document.getElementById('invBox').textContent='phantom.app/s/'+sid;
+  document.getElementById('invBox').textContent=location.origin+'/servers/'+sid;
 
   renderChs();
   document.getElementById('landing').style.display='none';
@@ -1929,7 +2008,8 @@ function boot(sid,snm){
     document.getElementById('sidebarName').textContent=$.me.name;
   }
 
-  if(window.innerWidth>=700) switchCh(c1);
+  const firstText=Object.values($.chs).find(ch=>ch.type==='text');
+  if(firstText&&window.innerWidth>=700) switchCh(firstText.id);
   else setView('ch');
 
 }
@@ -3446,8 +3526,30 @@ window.onerror = function(msg, src, line, col, err) {
   return false;
 };
 
-document.addEventListener('DOMContentLoaded',()=>{
+document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
+  try{
+    await ensureSession();
+    const path=location.pathname||'';
+    const srvM=path.match(/^\/servers\/([a-z0-9]{8})$/i);
+    const invM=path.match(/^\/invite\/([a-z0-9]{10})$/i);
+    if(invM){
+      try{
+        const j=await apiReq('/api/invites/'+invM[1]+'/join',{method:'POST',auth:true});
+        const srv=await getMyServerById(j.serverId);
+        if(srv) boot(srv.id,srv.name,srv); else { toast('Сервер не найден'); history.replaceState({},'','/login'); }
+      }catch(e){ toast('Сервер не найден'); history.replaceState({},'','/login'); }
+    } else if(srvM){
+      const srv=await getMyServerById(srvM[1]);
+      if(srv) boot(srv.id,srv.name,srv); else { toast('Сервер не найден'); history.replaceState({},'','/login'); }
+    } else {
+      const last=localStorage.getItem('morv_last_server');
+      if(last){
+        const srv=await getMyServerById(last);
+        if(srv) boot(srv.id,srv.name,srv);
+      }
+    }
+  }catch(e){}
   const btn=document.getElementById('sndBtn');
   if(!btn)return;
   let _t;
