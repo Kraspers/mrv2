@@ -1998,6 +1998,7 @@ function boot(sid,snm,serverData=null){
 
   localStorage.setItem('morv_last_server',sid);
   routeToServer(sid);
+  _inviteUrl='';
 
   const avaEl=document.getElementById('srvAva');
   if($.srvAva){
@@ -2850,47 +2851,40 @@ function savePrefix(){
 }
 
 // ── Invite ──
-function showInvite(){openSh('sh-inv');}
+let _inviteUrl='';
+async function ensureInvite(){
+  if(!_inviteUrl){
+    const r=await apiReq('/api/servers/'+$.sid+'/invite',{auth:true});
+    _inviteUrl=location.origin+(r.url||('/invite/'+(r.invite&&r.invite.code?r.invite.code:'')));
+    document.getElementById('invBox').textContent=_inviteUrl;
+  }
+  return _inviteUrl;
+}
+function showInvite(){
+  ensureInvite().then(()=>openSh('sh-inv')).catch(()=>{toast('Ошибка invite');openSh('sh-inv');});
+}
 function copyInv(){
-  navigator.clipboard.writeText('morv.app/s/'+$.sid).catch(()=>{});
+  ensureInvite().then((u)=>navigator.clipboard.writeText(u).catch(()=>{}));
   toast('Ссылка скопирована!');
 }
 
 // ── QR code ──
 function showQR(){
-  const url='morv.app/s/'+$.sid;
-  document.getElementById('qrLink').textContent=url;
-  drawQR(url);
-  openSh('sh-qr');
+  ensureInvite().then((url)=>{
+    document.getElementById('qrLink').textContent=url;
+    drawQR(url);
+    openSh('sh-qr');
+  }).catch(()=>toast('Ошибка invite'));
 }
 function drawQR(text){
   const canvas=document.getElementById('qrCanvas');
   const ctx=canvas.getContext('2d');
-  const size=200, cell=8, mod=Math.ceil(size/cell);
   const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()||'#0e0e12';
-  ctx.fillStyle=bg; ctx.fillRect(0,0,size,size);
-  let hash=5381;
-  for(let i=0;i<text.length;i++) hash=hash*33+text.charCodeAt(i);
-  hash=Math.abs(hash);
-  const accent=getComputedStyle(document.documentElement).getPropertyValue('--a').trim()||'#2BD1FF';
-  ctx.fillStyle=accent;
-  for(let r=0;r<mod;r++){
-    for(let c=0;c<mod;c++){
-      const inTL=(r<7 ? (c<7?1:0) : 0);
-      const inTR=(r<7 ? (c>=mod-7?1:0) : 0);
-      const inBL=(r>=mod-7 ? (c<7?1:0) : 0);
-      if(inTL||inTR||inBL){
-        const lr=inTL?r:(inTR?r:r-(mod-7));
-        const lc=inTL?c:(inTR?c-(mod-7):c);
-        const isBorder=(lr===0||lr===6||lc===0||lc===6);
-        const isInner=(lr>=2 ? (lr<=4 ? (lc>=2 ? (lc<=4?1:0) : 0) : 0) : 0);
-        if(isBorder||isInner) ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
-        continue;
-      }
-      const seed=Math.abs((hash*r*73+c*19)%1000);
-      if(seed%3===0) ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
-    }
-  }
+  ctx.fillStyle=bg; ctx.fillRect(0,0,canvas.width,canvas.height);
+  const img=new Image();
+  img.onload=()=>{ ctx.drawImage(img,0,0,canvas.width,canvas.height); };
+  img.onerror=()=>{ ctx.fillStyle='#2BD1FF'; ctx.fillRect(16,16,168,168); };
+  img.src='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(text);
 }
 
 // ── Bots ──

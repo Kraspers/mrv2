@@ -48,6 +48,34 @@ function loadData() {
 let db = loadData();
 function save() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
 
+function serializeServer(s) {
+  return {
+    id: s.id,
+    ownerId: s.ownerId,
+    type: s.type || 'NORMAL',
+    name: s.name,
+    org: s.org || '',
+    sections: s.sections || [],
+    channels: s.channels || {},
+    members: s.members || [],
+    createdAt: s.createdAt,
+    status: s.status || 'active',
+    invite: s.invite || null,
+  };
+}
+
+function deleteServerEverywhere(serverId) {
+  const srv = db.servers[serverId];
+  if (!srv) return false;
+  if (srv.invite?.code) delete db.invites[srv.invite.code];
+  Object.values(db.users).forEach((u) => {
+    u.servers = (u.servers || []).filter((id) => id !== serverId);
+  });
+  delete db.servers[serverId];
+  return true;
+}
+
+
 setInterval(() => {
   const t = now();
   for (const [code, inv] of Object.entries(db.invites)) {
@@ -132,11 +160,14 @@ app.post('/api/servers', auth, (req, res) => {
   const serverObj = {
     id,
     ownerId: req.user.id,
+    type: String(req.body.type || 'NORMAL').toUpperCase(),
+    org: String(req.body.org || ''),
     name: (req.body.name || `server-${id}`).toString(),
-    sections: [],
+    sections: Array.isArray(req.body.sections) ? req.body.sections : [],
     channels: {},
     members: [req.user.id],
     createdAt: now(),
+    status: 'active',
   };
   const inv = freshInvite(id);
   serverObj.invite = inv;
@@ -145,11 +176,11 @@ app.post('/api/servers', auth, (req, res) => {
   req.user.servers = req.user.servers || [];
   req.user.servers.push(id);
   save();
-  res.json({ server: serverObj });
+  res.json({ server: serializeServer(serverObj) });
 });
 
 app.get('/api/servers', auth, (req, res) => {
-  const servers = Object.values(db.servers).filter((s) => s.members.includes(req.user.id));
+  const servers = Object.values(db.servers).filter((s) => s.members.includes(req.user.id)).map(serializeServer);
   res.json({ servers });
 });
 
@@ -161,6 +192,20 @@ app.post('/api/servers/:id/channels', auth, (req, res) => {
   save();
   io.to(`server:${s.id}`).emit('server:update', s);
   res.json({ channel: s.channels[cid] });
+});
+
+
+app.get('/api/servers/:id/invite', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!s.invite || s.invite.expiresAt < now()) {
+    if (s.invite?.code) delete db.invites[s.invite.code];
+    const inv = freshInvite(s.id);
+    s.invite = inv;
+    db.invites[inv.code] = inv;
+    save();
+  }
+  res.json({ invite: s.invite, url: `/invite/${s.invite.code}` });
 });
 
 app.post('/api/invites/:code/join', auth, (req, res) => {
@@ -195,6 +240,7 @@ app.post('/api/admin/ban/server/:id', adminAuth, (req, res) => {
   const srv = db.servers[req.params.id];
   if (!srv) return res.status(404).json({ error: 'not found' });
   const reason = req.body.reason || '';
+  srv.status = 'banned';
   srv.members.forEach((uid) => {
     Object.values(db.sessions).forEach((sess) => {
       if (sess.userId === uid && sess.ip) db.bans.byIp[sess.ip] = { reason, at: now(), serverId: srv.id };
@@ -202,6 +248,50 @@ app.post('/api/admin/ban/server/:id', adminAuth, (req, res) => {
   });
   save();
   io.emit('ban:update');
+  res.json({ ok: true });
+});
+
+
+app.get('/api/admin/servers', adminAuth, (_req, res) => {
+  const servers = Object.values(db.servers).map(serializeServer);
+  res.json({ servers });
+});
+
+app.post('/api/admin/servers', adminAuth, (req, res) => {
+  const id = gid(8);
+  const type = String(req.body.type || 'FO').toUpperCase();
+  const name = String(req.body.name || `server-${id}`);
+  const sections = Array.isArray(req.body.sections) ? req.body.sections : [];
+  const channels = {};
+  sections.forEach((sec) => {
+    (sec.channels || []).forEach((ch) => {
+      const cid = gid(10);
+      channels[cid] = { id: cid, name: ch.name || 'channel', type: ch.type === 'голос' ? 'voice' : 'text', messages: [] };
+    });
+  });
+  const serverObj = {
+    id,
+    ownerId: 'admin',
+    type,
+    org: String(req.body.org || ''),
+    name,
+    sections,
+    channels,
+    members: [],
+    createdAt: now(),
+    status: 'active',
+  };
+  const inv = freshInvite(id);
+  serverObj.invite = inv;
+  db.servers[id] = serverObj;
+  db.invites[inv.code] = inv;
+  save();
+  res.json({ server: serializeServer(serverObj) });
+});
+
+app.post('/api/admin/servers/:id/delete', adminAuth, (req, res) => {
+  if (!deleteServerEverywhere(req.params.id)) return res.status(404).json({ error: 'not found' });
+  save();
   res.json({ ok: true });
 });
 
