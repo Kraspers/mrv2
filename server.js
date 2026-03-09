@@ -6,7 +6,11 @@ const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data.json');
+const HOST = process.env.HOST || '0.0.0.0';
+const DATA_FILE = process.env.DATA_FILE
+  ? path.resolve(process.env.DATA_FILE)
+  : path.join(__dirname, 'data.json');
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 function gid(n = 12) {
   return crypto.randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n);
@@ -62,13 +66,16 @@ setInterval(() => {
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, { cors: { origin: CORS_ORIGIN } });
 
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(__dirname));
 
 function ipOf(req) {
-  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
+  const xff = req.headers['x-forwarded-for'];
+  const raw = (Array.isArray(xff) ? xff[0] : xff) || req.ip || req.socket.remoteAddress || '';
+  return String(raw).split(',')[0].trim();
 }
 
 function auth(req, res, next) {
@@ -79,10 +86,12 @@ function auth(req, res, next) {
   if (db.bans.byIp[ip]) return res.status(403).json({ error: 'banned', reason: db.bans.byIp[ip].reason || '' });
   req.session = sess;
   req.user = db.users[sess.userId];
+  if (!req.user) return res.status(401).json({ error: 'session user missing' });
   next();
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/', (_req, res) => res.redirect('/login'));
 app.get('/admmrv', (_req, res) => res.sendFile(path.join(__dirname, 'morv-admin.html')));
 app.get('/login', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
 app.get('/invite/:code', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
@@ -236,6 +245,7 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Morv server running on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Morv server running on http://${HOST}:${PORT}`);
+  console.log(`DATA_FILE=${DATA_FILE}`);
 });
