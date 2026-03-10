@@ -1717,9 +1717,10 @@ html, body {
     </div>
   </div>
 </div>
-    <div class="privacy-badge-sub"></div>
+<div class="privacy-badge-sub"></div>
   </div>
 </div>
+<script src="/socket.io/socket.io.js"></script>
 <script>
 // ── State ──
 const EMOJIS = ['🦊','🐺','🦝','🦉','🐸','🦋','🐙','🦑','🐉','🦄','🐬','🦜','🐻‍❄️','🦈'];
@@ -1748,6 +1749,7 @@ let $ = {
   prefixes:{},
   isAdmin:false,
 };
+let _sock=null;
 
 // ── Utils ──
 const gid=(n=8)=>[...Array(n)].map(()=>'abcdefghijklmnopqrstuvwxyz0123456789'[Math.random()*36|0]).join('');
@@ -2021,14 +2023,18 @@ function applyServerData(srv, preserveBots){
 
   $.cats=[]; $.chs={};
   const sections=(srv.sections||[]);
-  if(sections.length) sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1)),serverSecIndex:idx}));
-  else $.cats.push({id:'sec0',name:'КАНАЛЫ'});
+  sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1)),serverSecIndex:idx}));
   $.msgs={}; $.unread={}; $.pinned={};
+  const catByChannel={};
+  sections.forEach((sec,idx)=>{
+    (sec.channels||[]).forEach(ch=>{ if(ch&&ch.id) catByChannel[ch.id]='sec'+idx; });
+  });
   Object.values(srv.channels||{}).forEach((ch,idx)=>{
-    const catId=$.cats[0]?$.cats[0].id:'sec0';
-    $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:''};
-    $.msgs[ch.id]=(ch.messages||[]).map(m=>({id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}}));
+    const catId=catByChannel[ch.id]||($.cats[0]&&$.cats[0].id)||'';
+    $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:'',coreApp:!!ch.coreApp,readonly:!!ch.readonly};
+    $.msgs[ch.id]=(ch.messages||[]).map(m=>({id:m.id,aid:m.authorId,author:(srv.memberProfiles||[]).find(p=>p.id===m.authorId)?.name||((m.authorId===$.me.id)?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{},replyTo:m.replyTo||null,pinned:!!m.pinned}));
     $.unread[ch.id]=0; $.pinned[ch.id]=[];
+    (ch.messages||[]).forEach(m=>{ if(m.pinned) $.pinned[ch.id].push(m.id); });
   });
 
   keepCats.forEach(c=>{ if(!$.cats.find(x=>x.id===c.id)) $.cats.push(c); });
@@ -2046,7 +2052,8 @@ function applyServerData(srv, preserveBots){
   const mem=[];
   if($.me) mem.push($.me);
   ids.filter(id=>id&&id!==meId).forEach((id,idx)=>{
-    mem.push({id,name:'user-'+String(id).slice(0,6),emoji:EMOJIS[idx%EMOJIS.length],you:false});
+    const prof=(srv.memberProfiles||[]).find(p=>p.id===id);
+    mem.push({id,name:(prof&&prof.name)||('user-'+String(id).slice(0,6)),emoji:EMOJIS[idx%EMOJIS.length],you:false});
   });
   $.members=mem;
   $.isAdmin = !!($.me&&srv&&srv.ownerId&&($.me.id===srv.ownerId||$.me.id==='admin'));
@@ -2100,6 +2107,7 @@ function boot(sid,snm,serverData=null){
   if(firstText&&window.innerWidth>=700) switchCh(firstText.id);
   else setView('ch');
   startStatePoll();
+  connectRealtime();
 
 }
 
@@ -2144,7 +2152,7 @@ async function pollServerState(){
     }
   }
 }
-function startStatePoll(){ clearInterval(_statePoll); _statePoll=setInterval(pollServerState,3000); }
+function startStatePoll(){ clearInterval(_statePoll); _statePoll=setInterval(pollServerState,1000); }
 
 function sysMsg(cid,txt){
   $.msgs[cid].push({id:gid(),sys:true,txt,ts:Date.now()});
@@ -2154,6 +2162,13 @@ function sysMsg(cid,txt){
 function renderChs(){
   const box=document.getElementById('chList');
   box.innerHTML='';
+  if(!$.cats.length){
+    const empty=document.createElement('div');
+    empty.style.cssText='display:flex;align-items:center;justify-content:center;min-height:40vh;color:var(--t3);font-size:14px;text-align:center;padding:16px;';
+    empty.textContent='Создайте раздел и начните общение!';
+    box.appendChild(empty);
+    return;
+  }
   $.cats.forEach(cat=>{
     const sec=document.createElement('div');
     sec.className='cat-sec';
@@ -2224,7 +2239,7 @@ function switchCh(cid){
     const ro=ch.readonly===true;
     const ca=ch.coreApp===true;
     document.getElementById('readonlyBar').style.display=(ro&&!ca)?'flex':'none';
-    document.getElementById('coreAppBar').style.display=ca?'flex':'none';
+    document.getElementById('coreAppBar').style.display=(ca&&$.isAdmin)?'flex':'none';
     document.getElementById('chatInp').style.display=(ro||ca)?'none':'';
     document.getElementById('sndBtn').style.display=(ro||ca)?'none':'';
   }
@@ -2579,18 +2594,10 @@ async function send(){
     });
   }
   try{
-    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages',{method:'POST',auth:true,body:{text:finalTxt}});
+    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages',{method:'POST',auth:true,body:{text:finalTxt,replyTo:$.replyTo||null}});
     const m=out&&out.msg?out.msg:null;
     if(m){
-      $.msgs[cid]=$.msgs[cid]||[];
-      $.msgs[cid].push({id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}});
       if(window._ccSlowMode>0) { window._ccLastSent=Date.now(); _ccStartSlowTimer(); }
-      if($.autoDelMs>0){
-        setTimeout(()=>{
-          $.msgs[cid]=($.msgs[cid]||[]).filter(x=>x.id!==m.id);
-          if($.cur===cid) renderMsgs();
-        }, $.autoDelMs);
-      }
     }
     $.fmtSegments=[]; $.activeFmt=null; $.fmtStart=null;
     if($.replyTo) clearReply();
@@ -2665,16 +2672,47 @@ function pickRxn(emoji){
 // ── Pin ──
 function togglePin(mid){
   const cid=$.cur;
-  if(!$.pinned[cid]) $.pinned[cid]=[];
-  const idx=$.pinned[cid].indexOf(mid);
-  if(idx>=0){
-    $.pinned[cid].splice(idx,1);
-    toast('Сообщение откреплено');
-  } else {
-    $.pinned[cid].push(mid);
-    toast('Сообщение закреплено');
-  }
-  updatePinnedBanner(cid);
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/pin',{method:'POST',auth:true,body:{messageId:mid}})
+    .then(out=>{ toast(out&&out.pinned?'Сообщение закреплено':'Сообщение откреплено'); })
+    .catch(()=>toast('Ошибка закрепления'));
+}
+
+function connectRealtime(){
+  if(!window.io||!API.token||!$.sid) return;
+  if(_sock){ try{ _sock.disconnect(); }catch(e){} _sock=null; }
+  _sock=io({auth:{token:API.token}});
+  _sock.on('connect',()=>{ _sock.emit('server:join',{serverId:$.sid}); });
+  _sock.on('server:update',(srv)=>{ if(srv&&srv.id===$.sid){ applyServerData(srv,true); renderChs(); if($.cur) renderMsgs(); } });
+  _sock.on('server:deleted',({serverId})=>{
+    if(serverId!==$.sid) return;
+    localStorage.removeItem('morv_last_server');
+    document.getElementById('app').classList.remove('on');
+    document.getElementById('landing').style.display='flex';
+    history.replaceState({},'','/login');
+  });
+  _sock.on('message:new',({serverId,channelId,msg})=>{
+    if(serverId!==$.sid||!msg) return;
+    $.msgs[channelId]=$.msgs[channelId]||[];
+    if($.msgs[channelId].some(x=>x.id===msg.id)) return;
+    const author=($.members.find(m=>m.id===msg.authorId)||{}).name||('user-'+String(msg.authorId||'').slice(0,6));
+    $.msgs[channelId].push({id:msg.id,aid:msg.authorId,author,text:msg.ciphertext||'',ts:msg.ts||Date.now(),reactions:msg.reactions||{},replyTo:msg.replyTo||null,pinned:!!msg.pinned});
+    if(msg.pinned){ $.pinned[channelId]=$.pinned[channelId]||[]; if(!$.pinned[channelId].includes(msg.id)) $.pinned[channelId].push(msg.id); }
+    if($.cur===channelId){ renderMsgs(); scrollDnIfAtBottom(); updatePinnedBanner(channelId); }
+  });
+  _sock.on('reaction:update',({serverId,channelId,messageId,reactions})=>{
+    if(serverId!==$.sid) return;
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId);
+    if(msg){ msg.reactions=reactions||{}; if($.cur===channelId) renderMsgs(); }
+  });
+  _sock.on('message:pin',({serverId,channelId,messageId,pinned})=>{
+    if(serverId!==$.sid) return;
+    $.pinned[channelId]=$.pinned[channelId]||[];
+    const idx=$.pinned[channelId].indexOf(messageId);
+    if(pinned&&idx<0) $.pinned[channelId].push(messageId);
+    if(!pinned&&idx>=0) $.pinned[channelId].splice(idx,1);
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId); if(msg) msg.pinned=!!pinned;
+    if($.cur===channelId){ renderMsgs(); updatePinnedBanner(channelId); }
+  });
 }
 
 // ── Edit msg ──
