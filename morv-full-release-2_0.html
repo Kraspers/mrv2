@@ -2144,7 +2144,6 @@ function renderChs(){
     h.innerHTML=`<span style="display:flex;align-items:center;gap:4px;">${cat.name}${cat.pinned?'<span class="cat-pin-ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></span>':''}</span>`;
     const p=document.createElement('button');
     p.className='cat-plus';p.textContent='+';p.title=cat.botId?'Добавить бота':'Добавить канал';
-    p.style.display=$.isAdmin?'flex':'none';
     p.onclick=e=>{e.stopPropagation();cat.botId?openAddBot():showChSh(cat.id);};
     h.appendChild(p);
     addLongPress(h, e=>showCtxCat(cat.id, e));
@@ -2206,9 +2205,8 @@ function switchCh(cid){
     initScrollBtn();
     const ro=ch.readonly===true;
     const ca=ch.coreApp===true;
-    const caBlocked=ca&&!$.isAdmin;
-    document.getElementById('readonlyBar').style.display=(ro||caBlocked)?'flex':'none';
-    document.getElementById('coreAppBar').style.display=(ca&&!caBlocked)?'flex':'none';
+    document.getElementById('readonlyBar').style.display=(ro&&!ca)?'flex':'none';
+    document.getElementById('coreAppBar').style.display=ca?'flex':'none';
     document.getElementById('chatInp').style.display=(ro||ca)?'none':'';
     document.getElementById('sndBtn').style.display=(ro||ca)?'none':'';
   }
@@ -3721,7 +3719,6 @@ function openCoreApp(){
   const body=document.getElementById('coreAppBody');
   // Route to Control Center if this is the CC bot channel
   const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341');
-  if(bot&&!$.isAdmin){ toast('В этот канал нельзя писать'); return; }
   if(bot){ renderControlCenter(body); document.getElementById('coreAppOverlay').classList.add('on'); return; }
   const msgs=Object.values($.msgs).flat();
   const totalMsgs=msgs.filter(m=>!m.sys).length;
