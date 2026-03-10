@@ -2021,7 +2021,7 @@ function applyServerData(srv, preserveBots){
 
   $.cats=[]; $.chs={};
   const sections=(srv.sections||[]);
-  if(sections.length) sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))}));
+  if(sections.length) sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1)),serverSecIndex:idx}));
   else $.cats.push({id:'sec0',name:'КАНАЛЫ'});
   $.msgs={}; $.unread={}; $.pinned={};
   Object.values(srv.channels||{}).forEach((ch,idx)=>{
@@ -2049,7 +2049,7 @@ function applyServerData(srv, preserveBots){
     mem.push({id,name:'user-'+String(id).slice(0,6),emoji:EMOJIS[idx%EMOJIS.length],you:false});
   });
   $.members=mem;
-  $.isAdmin = srv.ownerId==='admin';
+  $.isAdmin = !!($.me&&srv&&srv.ownerId&&($.me.id===srv.ownerId||$.me.id==='admin'));
 }
 
 function bootWithAva(sid,snm,avaData,serverData){
@@ -2536,12 +2536,11 @@ function showPinsList(){
   openSh('sh-pins');
 }
 
-function send(){
+async function send(){
   const inp=document.getElementById('chatInp');
   const txt=inp.value.trim(); if(!txt||!$.cur)return;
   const ch=$.chs[$.cur]; if(!ch||ch.type!=='text')return;
   const cid=$.cur;
-  // Slow mode check
   if(!$.editMsgId&&!$.editSchedId&&window._ccSlowMode>0){
     const now=Date.now();
     const last=window._ccLastSent||0;
@@ -2579,27 +2578,27 @@ function send(){
       finalTxt=finalTxt.slice(0,seg.start)+before+finalTxt.slice(seg.start,seg.end)+after+finalTxt.slice(seg.end);
     });
   }
-  const msg={id:gid(),aid:$.me.id,author:$.me.name,text:finalTxt,ts:Date.now(),reactions:{}};
-  if($.replyTo){msg.replyTo=$.replyTo; clearReply();}
-  $.msgs[cid].push(msg);
-  if(window._ccSlowMode>0) { window._ccLastSent=Date.now(); _ccStartSlowTimer(); }
-  $.fmtSegments=[]; $.activeFmt=null; $.fmtStart=null;
-  if($.autoDelMs>0){
-    setTimeout(()=>{
-      $.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.id!==msg.id);
-      if($.cur===cid) renderMsgs();
-    }, $.autoDelMs);
-  }
-  inp.value=''; inp.style.height=''; renderMsgs(); scrollDn();
-  const oth=$.members.filter(m=>!m.you);
-  if(oth.length&&Math.random()>.35&&!(ch&&ch.readonly)){
-    const r=oth[~~(Math.random()*oth.length)];
-    const rp=['ок','понял 👍','+','хм','интересно','согласен','...','🤔','ясно','точно'];
-    setTimeout(()=>{
-      if($.cur!==cid)return;
-      $.msgs[cid].push({id:gid(),aid:r.id,author:r.name,text:rp[~~(Math.random()*rp.length)],ts:Date.now(),reactions:{}});
-      if($.cur===cid){renderMsgs();scrollDnIfAtBottom();}
-    },900+Math.random()*2500);
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages',{method:'POST',auth:true,body:{text:finalTxt}});
+    const m=out&&out.msg?out.msg:null;
+    if(m){
+      $.msgs[cid]=$.msgs[cid]||[];
+      $.msgs[cid].push({id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}});
+      if(window._ccSlowMode>0) { window._ccLastSent=Date.now(); _ccStartSlowTimer(); }
+      if($.autoDelMs>0){
+        setTimeout(()=>{
+          $.msgs[cid]=($.msgs[cid]||[]).filter(x=>x.id!==m.id);
+          if($.cur===cid) renderMsgs();
+        }, $.autoDelMs);
+      }
+    }
+    $.fmtSegments=[]; $.activeFmt=null; $.fmtStart=null;
+    if($.replyTo) clearReply();
+    inp.value=''; inp.style.height=''; renderMsgs(); scrollDn();
+  }catch(e){
+    if(e.status===404) toast('Канал не найден на сервере');
+    else if(e.status===403) toast('Нет доступа к отправке');
+    else toast('Ошибка отправки');
   }
 }
 function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
@@ -2625,15 +2624,14 @@ function doReply(){
 }
 
 // ── Reactions ──
-function toggleRxn(mid,emoji){
+async function toggleRxn(mid,emoji){
   const cid=$.cur;
   const msg=($.msgs[cid]||[]).find(m=>m.id===mid); if(!msg)return;
-  if(!msg.reactions) msg.reactions={};
-  if(!msg.reactions[emoji]) msg.reactions[emoji]=[];
-  const idx=msg.reactions[emoji].indexOf($.me.id);
-  if(idx>=0) msg.reactions[emoji].splice(idx,1);
-  else msg.reactions[emoji].push($.me.id);
-  renderMsgs();
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/reactions',{method:'POST',auth:true,body:{messageId:mid,emoji}});
+    msg.reactions=(out&&out.reactions)?out.reactions:(msg.reactions||{});
+    renderMsgs();
+  }catch(e){ toast('Ошибка реакции'); }
 }
 
 function showMsgCtx(mid, e){
@@ -3128,6 +3126,7 @@ function renderBotList(){
 
 // ── Channel sheet ──
 function showChSh(catId){
+  if(!$.isAdmin){ toast('Только администратор может добавлять каналы'); return; }
   $.newCat=catId; $.newType='text';
   document.getElementById('tcTxt').classList.add('on');
   document.getElementById('tcVc').classList.remove('on');
@@ -3141,32 +3140,41 @@ function selType(t){
   document.getElementById('tcTxt').classList.toggle('on',t==='text');
   document.getElementById('tcVc').classList.toggle('on',t==='voice');
 }
-function doMakeCh(){
+async function doMakeCh(){
+  if(!$.isAdmin){ toast('Только администратор может добавлять каналы'); return; }
   const raw=document.getElementById('chNm').value.trim();
   if(!raw){document.getElementById('chNm').focus();return;}
   const nm=raw.toLowerCase().replace(/\s+/g,'-');
   const ds=document.getElementById('chDs').value.trim();
-  const id=gid();
-  $.chs[id]={id,name:nm,type:$.newType,cat:$.newCat,desc:ds};
-  $.msgs[id]=[];
-  $.unread[id]=0;
-  $.pinned[id]=[];
-  if($.newType==='text')sysMsg(id,'✨ Канал создан.');
-  closeSh('sh-ch'); renderChs(); switchCh(id);
-  toast('#'+nm+' создан');
+  const cat=$.cats.find(c=>c.id===$.newCat);
+  const sectionIndex=(cat&&Number.isInteger(cat.serverSecIndex))?cat.serverSecIndex:-1;
+  if(sectionIndex<0){ toast('Раздел не найден'); return; }
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels',{method:'POST',auth:true,body:{name:nm,type:$.newType,sectionIndex}});
+    if(out&&out.server) applyServerData(out.server,true);
+    closeSh('sh-ch'); renderChs();
+    const ch=out&&out.channel?out.channel:null;
+    if(ch&&ch.id) switchCh(ch.id);
+    toast('#'+nm+' создан');
+  }catch(e){ toast(e.status===403?'Только администратор может добавлять каналы':'Ошибка создания канала'); }
 }
 
 // ── Category sheet ──
 function showCatSh(){
+  if(!$.isAdmin){ toast('Только администратор может добавлять разделы'); return; }
   document.getElementById('catNm').value='';
   openSh('sh-cat');
   setTimeout(()=>document.getElementById('catNm').focus(),300);
 }
-function doMakeCat(){
+async function doMakeCat(){
+  if(!$.isAdmin){ toast('Только администратор может добавлять разделы'); return; }
   const nm=document.getElementById('catNm').value.trim().toUpperCase();
   if(!nm){document.getElementById('catNm').focus();return;}
-  $.cats.push({id:gid(),name:nm});
-  closeSh('sh-cat'); renderChs(); toast(nm+' создан');
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/sections',{method:'POST',auth:true,body:{name:nm}});
+    if(out&&out.server) applyServerData(out.server,true);
+    closeSh('sh-cat'); renderChs(); toast(nm+' создан');
+  }catch(e){ toast(e.status===403?'Только администратор может добавлять разделы':'Ошибка создания раздела'); }
 }
 
 // ── Long press ──

@@ -51,6 +51,11 @@ let db = loadData();
 if (!db.tombstones) db.tombstones = {};
 function save() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
 
+function isServerAdmin(userId, srv) {
+  return Boolean(srv) && (srv.ownerId === userId || userId === 'admin');
+}
+
+
 function serializeServer(s) {
   return {
     id: s.id,
@@ -189,17 +194,70 @@ app.get('/api/servers', auth, (req, res) => {
   res.json({ servers });
 });
 
+app.post('/api/servers/:id/sections', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!isServerAdmin(req.user.id, s)) return res.status(403).json({ error: 'forbidden' });
+  const name = String(req.body.name || '').trim().toUpperCase();
+  if (!name) return res.status(400).json({ error: 'bad section name' });
+  s.sections = Array.isArray(s.sections) ? s.sections : [];
+  s.sections.push({ name, channels: [] });
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
 app.post('/api/servers/:id/channels', auth, (req, res) => {
   const s = db.servers[req.params.id];
   if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!isServerAdmin(req.user.id, s)) return res.status(403).json({ error: 'forbidden' });
+  const name = String(req.body.name || 'new-channel').trim().toLowerCase().replace(/\s+/g, '-');
+  const type = req.body.type === 'voice' ? 'voice' : 'text';
+  const secIndex = Number.isInteger(req.body.sectionIndex) ? req.body.sectionIndex : -1;
+  if (!Array.isArray(s.sections) || secIndex < 0 || secIndex >= s.sections.length) return res.status(400).json({ error: 'bad section index' });
   const cid = gid(10);
-  s.channels[cid] = { id: cid, name: req.body.name || 'new-channel', type: req.body.type || 'text', messages: [] };
+  s.channels[cid] = { id: cid, name, type, messages: [] };
+  s.sections[secIndex].channels = Array.isArray(s.sections[secIndex].channels) ? s.sections[secIndex].channels : [];
+  s.sections[secIndex].channels.push({ id: cid, name, type: type === 'voice' ? 'голос' : 'текст' });
   save();
-  io.to(`server:${s.id}`).emit('server:update', s);
-  res.json({ channel: s.channels[cid] });
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s), channel: s.channels[cid] });
 });
 
+app.post('/api/servers/:id/channels/:channelId/messages', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (s.status === 'banned') return res.status(403).json({ error: 'banned', reason: 'Доступ к Morv был ограничен' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch || ch.type !== 'text') return res.status(404).json({ error: 'channel not found' });
+  const text = String(req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'empty message' });
+  const msg = { id: gid(12), authorId: req.user.id, ts: now(), ciphertext: text, iv: '', keyId: 'local', reactions: {} };
+  ch.messages = Array.isArray(ch.messages) ? ch.messages : [];
+  ch.messages.push(msg);
+  save();
+  io.to(`server:${s.id}`).emit('message:new', { serverId: s.id, channelId: ch.id, msg });
+  res.json({ msg });
+});
 
+app.post('/api/servers/:id/channels/:channelId/reactions', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch) return res.status(404).json({ error: 'channel not found' });
+  const messageId = String(req.body.messageId || '');
+  const emoji = String(req.body.emoji || '');
+  const m = (ch.messages || []).find((x) => x.id === messageId);
+  if (!m || !emoji) return res.status(404).json({ error: 'message not found' });
+  m.reactions = m.reactions || {};
+  m.reactions[emoji] = m.reactions[emoji] || [];
+  const idx = m.reactions[emoji].indexOf(req.user.id);
+  if (idx >= 0) m.reactions[emoji].splice(idx, 1);
+  else m.reactions[emoji].push(req.user.id);
+  save();
+  io.to(`server:${s.id}`).emit('reaction:update', { serverId: s.id, channelId: ch.id, messageId: m.id, reactions: m.reactions });
+  res.json({ reactions: m.reactions });
+});
 
 app.get('/api/servers/:id/state', auth, (req, res) => {
   const sid = req.params.id;
