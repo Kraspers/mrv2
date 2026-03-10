@@ -1730,6 +1730,7 @@ let $ = {
   autoDelMs:0,
   settingsSec:null,
   prefixes:{},
+  isAdmin:false,
 };
 
 // ── Utils ──
@@ -1815,6 +1816,8 @@ function _enforceBanRoute(){
 function showBlocked(reason=''){
   _banReason=reason||_banReason||'Обратитесь к администратору.';
   _banLockOn=true;
+  localStorage.setItem('morv_ban_lock','1');
+  localStorage.setItem('morv_ban_reason',_banReason);
   _renderBanScreen();
   _enforceBanRoute();
 }
@@ -1839,6 +1842,8 @@ async function apiReq(path, opts={}){
   if(opts.auth && out.res.status===401 && !opts._retried){
     API.token='';
   _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
     localStorage.removeItem('morv_token');
     await ensureSession(true);
     out=await apiReq(path,Object.assign({},opts,{_retried:true}));
@@ -1989,6 +1994,47 @@ function doEditSrv(){
   toast('Сервер обновлён');
 }
 
+
+function applyServerData(srv, preserveBots){
+  const keepCh = preserveBots ? Object.values($.chs).filter(ch=>ch.botId||ch.coreApp) : [];
+  const keepCatIds = new Set(keepCh.map(ch=>ch.cat));
+  const keepCats = preserveBots ? $.cats.filter(c=>keepCatIds.has(c.id)||c.botId||c.isBotCat) : [];
+  const keepMsgs = {};
+  keepCh.forEach(ch=>{ keepMsgs[ch.id]=($.msgs[ch.id]||[]); });
+
+  $.cats=[]; $.chs={};
+  const sections=(srv.sections||[]);
+  if(sections.length) sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))}));
+  else $.cats.push({id:'sec0',name:'КАНАЛЫ'});
+  $.msgs={}; $.unread={}; $.pinned={};
+  Object.values(srv.channels||{}).forEach((ch,idx)=>{
+    const catId=$.cats[0]?$.cats[0].id:'sec0';
+    $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:''};
+    $.msgs[ch.id]=(ch.messages||[]).map(m=>({id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}}));
+    $.unread[ch.id]=0; $.pinned[ch.id]=[];
+  });
+
+  keepCats.forEach(c=>{ if(!$.cats.find(x=>x.id===c.id)) $.cats.push(c); });
+  keepCh.forEach(ch=>{
+    if(!$.chs[ch.id]){
+      $.chs[ch.id]=ch;
+      $.msgs[ch.id]=keepMsgs[ch.id]||[];
+      $.unread[ch.id]=$.unread[ch.id]||0;
+      $.pinned[ch.id]=$.pinned[ch.id]||[];
+    }
+  });
+
+  const ids=Array.isArray(srv.members)?srv.members:[];
+  const meId=$.me&&$.me.id?$.me.id:'';
+  const mem=[];
+  if($.me) mem.push($.me);
+  ids.filter(id=>id&&id!==meId).forEach((id,idx)=>{
+    mem.push({id,name:'user-'+String(id).slice(0,6),emoji:EMOJIS[idx%EMOJIS.length],you:false});
+  });
+  $.members=mem;
+  $.isAdmin = srv.ownerId==='admin';
+}
+
 function bootWithAva(sid,snm,avaData,serverData){
   $.srvAva=avaData||null;
   boot(sid,snm,serverData);
@@ -1997,36 +2043,17 @@ function bootWithAva(sid,snm,avaData,serverData){
 function boot(sid,snm,serverData=null){
   $.sid=sid; $.snm=snm;
   if(!$.me||!$.me.id) $.me={id:gid(12),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
-  const srv=serverData||null;
-  $.cats=[];
-  $.chs={};
-  $.msgs={};
-  $.unread={};
-  $.pinned={};
-  $.members=[$.me];
-
-  if(srv){
-    const sections=(srv.sections||[]);
-    if(sections.length){
-      sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))}));
-    } else {
-      $.cats.push({id:'sec0',name:'КАНАЛЫ'});
-    }
-    Object.values(srv.channels||{}).forEach((ch,idx)=>{
-      const catId=$.cats[0]?$.cats[0].id:'sec0';
-      $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:''};
-      $.msgs[ch.id]=(ch.messages||[]).map(m=>({
-        id:m.id,aid:m.authorId,author:(m.authorId===$.me.id?'Вы':'user-'+String(m.authorId||'').slice(0,6)),
-        text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{}
-      }));
-      $.unread[ch.id]=0;
-      $.pinned[ch.id]=[];
-    });
-  }
+  const srv=serverData||{id:sid,name:snm,sections:[],channels:{},members:[$.me?$.me.id:''],ownerId:''};
+  applyServerData(srv,false);
 
   localStorage.setItem('morv_last_server',sid);
   routeToServer(sid);
   _inviteUrl='';
+  _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
 
   const avaEl=document.getElementById('srvAva');
   if($.srvAva){
@@ -2069,21 +2096,23 @@ async function pollServerState(){
         const srv=await getMyServerById(sid);
         if(srv){
           _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
+          localStorage.removeItem('morv_ban_lock');
+          localStorage.removeItem('morv_ban_reason');
           boot(srv.id,srv.name,srv);
           return;
         }
       }
-    }catch(e){}
+    }catch(e){ if(_banLockOn) showBlocked(_banReason); else document.getElementById('landing').style.display='flex'; }
     return;
   }
   try{
     const st=await apiReq('/api/servers/'+$.sid+'/state',{auth:true});
     if(st&&st.server){
       if((st.server.name||'')!==$.snm){ $.snm=st.server.name||$.snm; document.getElementById('srvNm').textContent=$.snm; }
-      if(Array.isArray(st.server.sections)){
-        $.cats=st.server.sections.length?st.server.sections.map((sec,idx)=>({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1))})):[{id:'sec0',name:'КАНАЛЫ'}];
-        renderChs();
-      }
+      applyServerData(st.server,true);
+      renderChs();
     }
   }catch(e){
     if(e.status===404){
@@ -2115,6 +2144,7 @@ function renderChs(){
     h.innerHTML=`<span style="display:flex;align-items:center;gap:4px;">${cat.name}${cat.pinned?'<span class="cat-pin-ic"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></span>':''}</span>`;
     const p=document.createElement('button');
     p.className='cat-plus';p.textContent='+';p.title=cat.botId?'Добавить бота':'Добавить канал';
+    p.style.display=$.isAdmin?'flex':'none';
     p.onclick=e=>{e.stopPropagation();cat.botId?openAddBot():showChSh(cat.id);};
     h.appendChild(p);
     addLongPress(h, e=>showCtxCat(cat.id, e));
@@ -2176,8 +2206,9 @@ function switchCh(cid){
     initScrollBtn();
     const ro=ch.readonly===true;
     const ca=ch.coreApp===true;
-    document.getElementById('readonlyBar').style.display=(ro&&!ca)?'flex':'none';
-    document.getElementById('coreAppBar').style.display=ca?'flex':'none';
+    const caBlocked=ca&&!$.isAdmin;
+    document.getElementById('readonlyBar').style.display=(ro||caBlocked)?'flex':'none';
+    document.getElementById('coreAppBar').style.display=(ca&&!caBlocked)?'flex':'none';
     document.getElementById('chatInp').style.display=(ro||ca)?'none':'';
     document.getElementById('sndBtn').style.display=(ro||ca)?'none':'';
   }
@@ -3530,6 +3561,8 @@ async function doPanic(){
   localStorage.removeItem('morv_token');
   API.token='';
   _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
   closeSh('sh-panic');
   const settings=document.getElementById('sh-settings');
   if(settings) closeSh('sh-settings');
@@ -3617,6 +3650,11 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
   startStatePoll();
   const pth=location.pathname||'';
+  if(localStorage.getItem('morv_ban_lock')==='1'){
+    _banLockOn=true;
+    _banReason=localStorage.getItem('morv_ban_reason')||'';
+    showBlocked(_banReason);
+  }
   if(/^\/servers\//i.test(pth)||/^\/invite\//i.test(pth)){
     document.getElementById('landing').style.display='none';
   }
@@ -3683,6 +3721,7 @@ function openCoreApp(){
   const body=document.getElementById('coreAppBody');
   // Route to Control Center if this is the CC bot channel
   const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341');
+  if(bot&&!$.isAdmin){ toast('В этот канал нельзя писать'); return; }
   if(bot){ renderControlCenter(body); document.getElementById('coreAppOverlay').classList.add('on'); return; }
   const msgs=Object.values($.msgs).flat();
   const totalMsgs=msgs.filter(m=>!m.sys).length;
