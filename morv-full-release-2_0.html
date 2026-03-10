@@ -85,6 +85,14 @@ html, body {
 }
 .land-sheet p { font-size: 13px; color: var(--t2); line-height: 1.6; margin-bottom: 22px; }
 
+
+#banScreen{position:fixed;inset:0;z-index:10000;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;}
+#banScreen.on{display:flex;}
+.ban-wrap{max-width:420px;width:100%;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;}
+.ban-emoji{font-size:54px;line-height:1;}
+.ban-title{font-size:20px;font-weight:800;color:var(--t);}
+.ban-reason{font-size:14px;line-height:1.55;color:var(--t2);}
+
 .btn-main {
   width: 100%; height: 52px;
   background: var(--a); border: none; border-radius: 14px;
@@ -1054,6 +1062,14 @@ html, body {
   </div>
 </div>
 
+<div id="banScreen">
+  <div class="ban-wrap">
+    <div class="ban-emoji">❌</div>
+    <div class="ban-title">Доступ к Morv был ограничен</div>
+    <div class="ban-reason" id="banReason">Обратитесь к администратору.</div>
+  </div>
+</div>
+
 <!-- ══ APP ══ -->
 <div id="app">
 
@@ -1798,14 +1814,15 @@ const closeSh=id=>document.getElementById(id).classList.remove('on');
 let _banLockOn=false;
 let _banReason='';
 function _renderBanScreen(){
-  document.getElementById('landing').style.display='flex';
+  const reasonEl=document.getElementById('banReason');
+  if(reasonEl) reasonEl.textContent=_banReason||'Обратитесь к администратору.';
+  document.getElementById('landing').style.display='none';
   document.getElementById('app').classList.remove('on');
-  const t=document.querySelector('.land-sheet h2');
-  const p=document.querySelector('.land-sheet p');
-  const top=document.querySelector('.land-top');
-  if(top) top.innerHTML='<div style="font-size:48px;line-height:1;margin-bottom:10px">❌</div><div class="logo">morv</div><div class="logo-sub">ACCESS BLOCKED</div>';
-  if(t) t.textContent='Доступ к Morv был ограничен';
-  if(p) p.textContent=_banReason||'Обратитесь к администратору.';
+  document.getElementById('banScreen').classList.add('on');
+}
+function _hideBanScreen(){
+  const b=document.getElementById('banScreen');
+  if(b) b.classList.remove('on');
 }
 function _enforceBanRoute(){
   if(!_banLockOn) return;
@@ -2052,6 +2069,7 @@ function boot(sid,snm,serverData=null){
   _banLockOn=false;
   localStorage.removeItem('morv_ban_lock');
   localStorage.removeItem('morv_ban_reason');
+  _hideBanScreen();
   localStorage.removeItem('morv_ban_lock');
   localStorage.removeItem('morv_ban_reason');
 
@@ -3653,6 +3671,7 @@ document.addEventListener('DOMContentLoaded',async ()=>{
     _banReason=localStorage.getItem('morv_ban_reason')||'';
     showBlocked(_banReason);
   }
+  if(!_banLockOn) _hideBanScreen();
   if(/^\/servers\//i.test(pth)||/^\/invite\//i.test(pth)){
     document.getElementById('landing').style.display='none';
   }
