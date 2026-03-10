@@ -128,6 +128,7 @@ app.get('/admmrv', (_req, res) => res.sendFile(path.join(__dirname, 'morv-admin.
 app.get('/login', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
 app.get('/invite/:code', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
 app.get('/servers/:code', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
+app.get('/ban', (_req, res) => res.sendFile(path.join(__dirname, 'morv-full-release-2_0.html')));
 
 app.post('/api/auth/device', (req, res) => {
   const ip = ipOf(req);
@@ -266,6 +267,21 @@ app.post('/api/admin/ban/server/:id', adminAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+
+
+app.post('/api/admin/unban/server/:id', adminAuth, (req, res) => {
+  const srv = db.servers[req.params.id];
+  if (!srv) return res.status(404).json({ error: 'not found' });
+  srv.status = 'active';
+  Object.keys(db.bans.byIp).forEach((ip) => {
+    const b = db.bans.byIp[ip];
+    if (b && b.serverId === srv.id) delete db.bans.byIp[ip];
+  });
+  save();
+  io.emit('ban:update');
+  io.to(`server:${srv.id}`).emit('server:update', serializeServer(srv));
+  res.json({ ok: true });
+});
 
 app.get('/api/admin/servers', adminAuth, (_req, res) => {
   const servers = Object.values(db.servers).map(serializeServer);

@@ -1794,13 +1794,29 @@ function toast(m){
 }
 const openSh=id=>document.getElementById(id).classList.add('on');
 const closeSh=id=>document.getElementById(id).classList.remove('on');
-function showBlocked(reason=''){
+let _banLockOn=false;
+let _banReason='';
+function _renderBanScreen(){
   document.getElementById('landing').style.display='flex';
   document.getElementById('app').classList.remove('on');
   const t=document.querySelector('.land-sheet h2');
   const p=document.querySelector('.land-sheet p');
+  const top=document.querySelector('.land-top');
+  if(top) top.innerHTML='<div style="font-size:48px;line-height:1;margin-bottom:10px">❌</div><div class="logo">morv</div><div class="logo-sub">ACCESS BLOCKED</div>';
   if(t) t.textContent='Доступ к Morv был ограничен';
-  if(p) p.textContent=reason||'Обратитесь к администратору.';
+  if(p) p.textContent=_banReason||'Обратитесь к администратору.';
+}
+function _enforceBanRoute(){
+  if(!_banLockOn) return;
+  const p=location.pathname||'';
+  if(p==='/admmrv') return;
+  if(p!=='/ban') history.replaceState({},'','/ban');
+}
+function showBlocked(reason=''){
+  _banReason=reason||_banReason||'Обратитесь к администратору.';
+  _banLockOn=true;
+  _renderBanScreen();
+  _enforceBanRoute();
 }
 
 const API={
@@ -1822,6 +1838,7 @@ async function apiReq(path, opts={}){
   let out=await doFetch();
   if(opts.auth && out.res.status===401 && !opts._retried){
     API.token='';
+  _banLockOn=false;
     localStorage.removeItem('morv_token');
     await ensureSession(true);
     out=await apiReq(path,Object.assign({},opts,{_retried:true}));
@@ -2043,7 +2060,22 @@ function boot(sid,snm,serverData=null){
 
 let _statePoll=null;
 async function pollServerState(){
-  if(!$.sid) return;
+  if(!_banLockOn && !$.sid) return;
+  if(_banLockOn){
+    try{
+      await ensureSession();
+      const sid=localStorage.getItem('morv_last_server');
+      if(sid){
+        const srv=await getMyServerById(sid);
+        if(srv){
+          _banLockOn=false;
+          boot(srv.id,srv.name,srv);
+          return;
+        }
+      }
+    }catch(e){}
+    return;
+  }
   try{
     const st=await apiReq('/api/servers/'+$.sid+'/state',{auth:true});
     if(st&&st.server){
@@ -2060,6 +2092,8 @@ async function pollServerState(){
       document.getElementById('app').classList.remove('on');
       document.getElementById('landing').style.display='flex';
       history.replaceState({},'','/login');
+    } else if(e.status===403){
+      showBlocked(e.data&&e.data.reason?e.data.reason:'');
     }
   }
 }
@@ -3495,6 +3529,7 @@ async function doPanic(){
   localStorage.removeItem('morv_last_server');
   localStorage.removeItem('morv_token');
   API.token='';
+  _banLockOn=false;
   closeSh('sh-panic');
   const settings=document.getElementById('sh-settings');
   if(settings) closeSh('sh-settings');
@@ -3567,6 +3602,9 @@ window.addEventListener('unhandledrejection', function(e){
   // suppress fetch/network errors from sticker loading
   if(e.reason && (String(e.reason).includes('fetch') || String(e.reason).includes('load'))) e.preventDefault();
 });
+window.addEventListener('popstate',()=>{ _enforceBanRoute(); });
+setInterval(()=>{ if(_banLockOn) _enforceBanRoute(); },700);
+
 window.onerror = function(msg, src, line, col, err) {
   const info = (err && err.stack) ? err.stack.slice(0,200) : (msg+' L'+line+':'+col);
   console.warn('MORV_ERR:', info);
@@ -3577,6 +3615,7 @@ window.onerror = function(msg, src, line, col, err) {
 
 document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
+  startStatePoll();
   const pth=location.pathname||'';
   if(/^\/servers\//i.test(pth)||/^\/invite\//i.test(pth)){
     document.getElementById('landing').style.display='none';

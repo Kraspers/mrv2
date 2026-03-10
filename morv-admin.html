@@ -676,20 +676,22 @@ function renderBanned(){
       <div class="ban-meta">ID: ${b.id} · Дата: ${b.date}</div>
     </div>`).join('');
 }
-function unbanById(id){
+async function unbanById(id){
+  try{ await adminReq('/api/admin/unban/server/'+id,{method:'POST'}); }catch(e){}
   STATE.banned=STATE.banned.filter(b=>b.id!==id);
   const fo=STATE.foServers.find(x=>x.id===id); if(fo) fo.status='active';
   addLog(`ID ${id} удалён из бан-листа`);
-  updateBadges(); updateStats(); renderBanned(); renderFOServers();
+  updateBadges(); updateStats(); renderBanned(); await renderFOServers();
   toast('Разблокировано');
 }
 function clearBanList(){
   if(!STATE.banned.length) return;
-  showConfirm('Очистить бан-лист?','Все заблокированные серверы будут разблокированы.',()=>{
+  showConfirm('Очистить бан-лист?','Все заблокированные серверы будут разблокированы.',async ()=>{
+    for(const b of STATE.banned){ try{ await adminReq('/api/admin/unban/server/'+b.id,{method:'POST'}); }catch(e){} }
     STATE.banned.forEach(b=>{ const fo=STATE.foServers.find(x=>x.id===b.id); if(fo) fo.status='active'; });
     STATE.banned=[];
     addLog('Бан-лист очищен');
-    updateBadges(); updateStats(); renderBanned(); renderFOServers();
+    updateBadges(); updateStats(); renderBanned(); await renderFOServers();
     toast('Бан-лист очищен');
   });
 }
