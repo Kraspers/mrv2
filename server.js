@@ -55,6 +55,12 @@ function isServerAdmin(userId, srv) {
   return Boolean(srv) && (srv.ownerId === userId || userId === 'admin');
 }
 
+function canManage(userId, srv, perm) {
+  if (isServerAdmin(userId, srv)) return true;
+  const p = srv?.memberPerms?.[userId];
+  return Boolean(p && p[perm]);
+}
+
 
 function serializeServer(s) {
   const memberProfiles = (s.members || []).map((id) => ({
@@ -66,6 +72,7 @@ function serializeServer(s) {
     ownerId: s.ownerId,
     type: s.type || 'NORMAL',
     name: s.name,
+    avatar: s.avatar || null,
     org: s.org || '',
     sections: s.sections || [],
     channels: s.channels || {},
@@ -73,6 +80,8 @@ function serializeServer(s) {
     memberProfiles,
     createdAt: s.createdAt,
     status: s.status || 'active',
+    bots: s.bots || [],
+    memberPerms: s.memberPerms || {},
     invite: s.invite || null,
   };
 }
@@ -84,6 +93,13 @@ function deleteServerEverywhere(serverId) {
   Object.values(db.users).forEach((u) => {
     u.servers = (u.servers || []).filter((id) => id !== serverId);
   });
+  if (srv.channels) {
+    Object.values(srv.channels).forEach((ch) => {
+      (ch.messages || []).forEach((m) => {
+        if (m.replyTo) m.replyTo.deleted = true;
+      });
+    });
+  }
   db.tombstones[serverId] = { reason: 'server_deleted', at: now() };
   delete db.servers[serverId];
   return true;
@@ -178,9 +194,12 @@ app.post('/api/servers', auth, (req, res) => {
     type: String(req.body.type || 'NORMAL').toUpperCase(),
     org: String(req.body.org || ''),
     name: (req.body.name || `server-${id}`).toString(),
+    avatar: req.body.avatar || null,
     sections: Array.isArray(req.body.sections) ? req.body.sections : [],
     channels: {},
     members: [req.user.id],
+    memberPerms: {},
+    bots: [],
     createdAt: now(),
     status: 'active',
   };
@@ -202,7 +221,7 @@ app.get('/api/servers', auth, (req, res) => {
 app.post('/api/servers/:id/sections', auth, (req, res) => {
   const s = db.servers[req.params.id];
   if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
-  if (!isServerAdmin(req.user.id, s)) return res.status(403).json({ error: 'forbidden' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
   if (s.type === 'FO') return res.status(403).json({ error: 'forbidden for FO server' });
   const name = String(req.body.name || '').trim().toUpperCase();
   if (!name) return res.status(400).json({ error: 'bad section name' });
@@ -216,7 +235,7 @@ app.post('/api/servers/:id/sections', auth, (req, res) => {
 app.post('/api/servers/:id/channels', auth, (req, res) => {
   const s = db.servers[req.params.id];
   if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
-  if (!isServerAdmin(req.user.id, s)) return res.status(403).json({ error: 'forbidden' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
   if (s.type === 'FO') return res.status(403).json({ error: 'forbidden for FO server' });
   const name = String(req.body.name || 'new-channel').trim().toLowerCase().replace(/\s+/g, '-');
   const type = req.body.type === 'voice' ? 'voice' : 'text';
@@ -284,6 +303,195 @@ app.post('/api/servers/:id/channels/:channelId/reactions', auth, (req, res) => {
   res.json({ reactions: m.reactions });
 });
 
+app.post('/api/servers/:id/update', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageServer')) return res.status(403).json({ error: 'forbidden' });
+  if (typeof req.body.name === 'string' && req.body.name.trim()) s.name = req.body.name.trim();
+  if (typeof req.body.avatar === 'string' || req.body.avatar === null) s.avatar = req.body.avatar || null;
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
+app.post('/api/servers/:id/channels/:channelId/update', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch) return res.status(404).json({ error: 'channel not found' });
+  if (typeof req.body.name === 'string' && req.body.name.trim()) ch.name = req.body.name.trim();
+  if (typeof req.body.desc === 'string') ch.desc = req.body.desc;
+  (s.sections || []).forEach((sec) => {
+    (sec.channels || []).forEach((c) => { if (c.id === ch.id) { c.name = ch.name; } });
+  });
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
+app.post('/api/servers/:id/channels/:channelId/delete', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch) return res.status(404).json({ error: 'channel not found' });
+  delete s.channels[ch.id];
+  (s.sections || []).forEach((sec) => {
+    sec.channels = (sec.channels || []).filter((c) => c.id !== ch.id);
+  });
+  if (ch.botId) s.bots = (s.bots || []).filter((b) => b.id !== ch.botId);
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
+app.post('/api/servers/:id/sections/:sectionIndex/update', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
+  const i = Number(req.params.sectionIndex);
+  if (!Number.isInteger(i) || !s.sections || i < 0 || i >= s.sections.length) return res.status(404).json({ error: 'section not found' });
+  const nm = String(req.body.name || '').trim();
+  if (!nm) return res.status(400).json({ error: 'bad section name' });
+  s.sections[i].name = nm;
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
+app.post('/api/servers/:id/sections/:sectionIndex/delete', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageChannels')) return res.status(403).json({ error: 'forbidden' });
+  const i = Number(req.params.sectionIndex);
+  if (!Number.isInteger(i) || !s.sections || i < 0 || i >= s.sections.length) return res.status(404).json({ error: 'section not found' });
+  const sec = s.sections[i];
+  (sec.channels || []).forEach((ch) => {
+    delete s.channels[ch.id];
+  });
+  s.sections.splice(i, 1);
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s) });
+});
+
+app.post('/api/servers/:id/channels/:channelId/messages/:messageId/update', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch) return res.status(404).json({ error: 'channel not found' });
+  const m = (ch.messages || []).find((x) => x.id === req.params.messageId);
+  if (!m) return res.status(404).json({ error: 'message not found' });
+  if (m.authorId !== req.user.id && !canManage(req.user.id, s, 'manageMessages')) return res.status(403).json({ error: 'forbidden' });
+  const text = String(req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'empty message' });
+  m.ciphertext = text;
+  m.edited = true;
+  save();
+  io.to(`server:${s.id}`).emit('message:update', { serverId: s.id, channelId: ch.id, messageId: m.id, text: m.ciphertext, edited: true });
+  res.json({ ok: true });
+});
+
+app.post('/api/servers/:id/channels/:channelId/messages/:messageId/delete', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  const ch = s.channels?.[req.params.channelId];
+  if (!ch) return res.status(404).json({ error: 'channel not found' });
+  const m = (ch.messages || []).find((x) => x.id === req.params.messageId);
+  if (!m) return res.status(404).json({ error: 'message not found' });
+  if (m.authorId !== req.user.id && !canManage(req.user.id, s, 'manageMessages')) return res.status(403).json({ error: 'forbidden' });
+  ch.messages = (ch.messages || []).filter((x) => x.id !== m.id);
+  Object.values(s.channels || {}).forEach((c) => {
+    (c.messages || []).forEach((msg) => {
+      if (msg.replyTo && msg.replyTo.id === m.id) {
+        msg.replyTo.deleted = true;
+        msg.replyTo.text = 'Сообщение удалено';
+      }
+    });
+  });
+  save();
+  io.to(`server:${s.id}`).emit('message:delete', { serverId: s.id, channelId: ch.id, messageId: m.id });
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ ok: true });
+});
+
+app.post('/api/servers/:id/members/:userId/remove', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  const uid = req.params.userId;
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageMembers')) return res.status(403).json({ error: 'forbidden' });
+  if (uid === s.ownerId) return res.status(400).json({ error: 'cannot remove owner' });
+  s.members = (s.members || []).filter((id) => id !== uid);
+  if (s.memberPerms) delete s.memberPerms[uid];
+  if (db.users[uid]) db.users[uid].servers = (db.users[uid].servers || []).filter((id) => id !== s.id);
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ ok: true });
+});
+
+app.post('/api/servers/:id/members/:userId/permissions', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  const uid = req.params.userId;
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageMembers')) return res.status(403).json({ error: 'forbidden' });
+  if (uid === s.ownerId) return res.status(400).json({ error: 'owner always admin' });
+  s.memberPerms = s.memberPerms || {};
+  s.memberPerms[uid] = {
+    manageChannels: !!req.body.manageChannels,
+    manageServer: !!req.body.manageServer,
+    manageMembers: !!req.body.manageMembers,
+    manageMessages: !!req.body.manageMessages,
+    manageBots: !!req.body.manageBots,
+  };
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ ok: true, permissions: s.memberPerms[uid] });
+});
+
+app.post('/api/servers/:id/bots/add', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageBots')) return res.status(403).json({ error: 'forbidden' });
+  const code = String(req.body.code || '');
+  const name = String(req.body.name || 'bot');
+  if (!code) return res.status(400).json({ error: 'bad code' });
+  s.bots = s.bots || [];
+  if (s.bots.some((b) => b.code === code)) return res.status(409).json({ error: 'bot already added' });
+  const botId = gid(10);
+  const bot = { id: botId, code, name, emoji: String(req.body.emoji || '🤖'), desc: String(req.body.desc || ''), coreApp: !!req.body.coreApp };
+  s.bots.push(bot);
+  if (req.body.channelName) {
+    const cid = `bot-ch-${botId}`;
+    s.channels[cid] = { id: cid, name: String(req.body.channelName), type: 'text', readonly: true, coreApp: !!req.body.coreApp, botId, messages: [] };
+    if (Array.isArray(s.sections) && s.sections.length) {
+      const sec = s.sections[0];
+      sec.channels = sec.channels || [];
+      sec.channels.push({ id: cid, name: s.channels[cid].name, type: 'текст' });
+    }
+  }
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ server: serializeServer(s), bot });
+});
+
+app.post('/api/servers/:id/bots/:botId/remove', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!canManage(req.user.id, s, 'manageBots')) return res.status(403).json({ error: 'forbidden' });
+  const bid = req.params.botId;
+  s.bots = (s.bots || []).filter((b) => b.id !== bid);
+  Object.values(s.channels || {}).forEach((ch) => {
+    if (ch.botId === bid) delete s.channels[ch.id];
+  });
+  (s.sections || []).forEach((sec) => {
+    sec.channels = (sec.channels || []).filter((ch) => (s.channels || {})[ch.id]);
+  });
+  save();
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ ok: true });
+});
+
 app.post('/api/servers/:id/channels/:channelId/pin', auth, (req, res) => {
   const s = db.servers[req.params.id];
   if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
@@ -330,8 +538,23 @@ app.post('/api/invites/:code/join', auth, (req, res) => {
   if (!s.members.includes(req.user.id)) s.members.push(req.user.id);
   req.user.servers = req.user.servers || [];
   if (!req.user.servers.includes(s.id)) req.user.servers.push(s.id);
+  const welcomeBot = (s.bots || []).find((b) => b.code === '111111');
+  if (welcomeBot) {
+    const wch = Object.values(s.channels || {}).find((ch) => ch.botId === welcomeBot.id);
+    if (wch) {
+      wch.messages = wch.messages || [];
+      wch.messages.push({
+        id: gid(12),
+        authorId: `bot-${welcomeBot.id}`,
+        ts: now(),
+        ciphertext: `👋 ${req.user.name} присоединился к серверу`,
+        reactions: {},
+        pinned: false,
+      });
+    }
+  }
   save();
-  io.to(`server:${s.id}`).emit('server:update', s);
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
   res.json({ serverId: s.id });
 });
 
@@ -404,9 +627,12 @@ app.post('/api/admin/servers', adminAuth, (req, res) => {
     type,
     org: String(req.body.org || ''),
     name,
+    avatar: req.body.avatar || null,
     sections,
     channels,
     members: [],
+    memberPerms: {},
+    bots: [],
     createdAt: now(),
     status: 'active',
   };

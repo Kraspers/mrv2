@@ -92,6 +92,8 @@ html, body {
 .ban-emoji{font-size:54px;line-height:1;}
 .ban-title{font-size:20px;font-weight:800;color:var(--t);}
 .ban-reason{font-size:14px;line-height:1.55;color:var(--t2);}
+#inviteNotFound{position:fixed;inset:0;z-index:9999;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;}
+#inviteNotFound.on{display:flex;}
 
 .btn-main {
   width: 100%; height: 52px;
@@ -1069,6 +1071,14 @@ html, body {
     <div class="ban-reason" id="banReason">Обратитесь к администратору.</div>
   </div>
 </div>
+<div id="inviteNotFound">
+  <div class="ban-wrap">
+    <div class="ban-emoji">😞</div>
+    <div class="ban-title">Сервер не найден</div>
+    <div class="ban-reason">Возможно, сервер был удалён или ссылка недействительна.</div>
+    <button class="btn-main" style="max-width:220px;" onclick="goHomeFromInviteNotFound()">На главную</button>
+  </div>
+</div>
 
 <!-- ══ APP ══ -->
 <div id="app">
@@ -1674,7 +1684,7 @@ html, body {
     <h3>QR-код приглашения</h3>
     <p>Отсканируйте чтобы присоединиться</p>
     <div style="display:flex;justify-content:center;padding:8px 0 16px;">
-      <canvas id="qrCanvas" width="200" height="200" style="border-radius:12px;"></canvas>
+      <canvas id="qrCanvas" width="160" height="160" style="border-radius:12px;"></canvas>
     </div>
     <div style="text-align:center;font-size:11px;color:var(--t3);margin-bottom:8px;" id="qrLink"></div>
     <div class="s-row">
@@ -1748,6 +1758,7 @@ let $ = {
   settingsSec:null,
   prefixes:{},
   isAdmin:false,
+  perms:{},
 };
 let _sock=null;
 
@@ -1840,6 +1851,23 @@ function showBlocked(reason=''){
   _renderBanScreen();
   _enforceBanRoute();
 }
+function showInviteNotFound(){
+  document.getElementById('landing').style.display='none';
+  document.getElementById('app').classList.remove('on');
+  document.getElementById('inviteNotFound').classList.add('on');
+}
+function hideInviteNotFound(){
+  const n=document.getElementById('inviteNotFound');
+  if(n) n.classList.remove('on');
+}
+function goHomeFromInviteNotFound(){
+  hideInviteNotFound();
+  history.replaceState({},'', '/login');
+  document.getElementById('landing').style.display='flex';
+}
+function canManage(perm){
+  return !!($.isAdmin||($.perms&&$.perms[perm]));
+}
 
 const API={
   token: localStorage.getItem('morv_token')||'',
@@ -1928,7 +1956,7 @@ async function doCreateServer(){
   const name=nm||('phantom-'+gid(4));
   try{
     await ensureSession();
-    const data=await apiReq('/api/servers',{method:'POST',auth:true,body:{name}});
+    const data=await apiReq('/api/servers',{method:'POST',auth:true,body:{name,avatar:window._srvAvaData||null}});
     closeSh('sh-create');
     bootWithAva(data.server.id,data.server.name,window._srvAvaData||null,data.server);
   }catch(e){
@@ -1999,18 +2027,16 @@ function doEditSrv(){
   const nm=document.getElementById('editsrvName').value.trim();
   if(!nm){document.getElementById('editsrvName').focus();return;}
   const imgEl=document.getElementById('editsrvAvaImg');
-  $.snm=nm;
-  $.srvAva=imgEl.style.display!=='none'&&imgEl.src?imgEl.src:null;
-  const avaEl=document.getElementById('srvAva');
-  if($.srvAva){
-    avaEl.innerHTML=`<img src="${$.srvAva}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">`;
-  } else {
-    avaEl.textContent=nm[0].toUpperCase(); avaEl.innerHTML='';
-    avaEl.textContent=nm[0].toUpperCase();
-  }
-  document.getElementById('srvNm').textContent=nm;
-  closeSh('sh-editsrv');
-  toast('Сервер обновлён');
+  const avatar=imgEl.style.display!=='none'&&imgEl.src?imgEl.src:null;
+  apiReq('/api/servers/'+$.sid+'/update',{method:'POST',auth:true,body:{name:nm,avatar}})
+    .then((out)=>{
+      if(out&&out.server){
+        applyServerData(out.server,true);
+        renderChs();
+      }
+      closeSh('sh-editsrv');
+      toast('Сервер обновлён');
+    }).catch(()=>toast('Ошибка обновления сервера'));
 }
 
 
@@ -2057,6 +2083,11 @@ function applyServerData(srv, preserveBots){
   });
   $.members=mem;
   $.isAdmin = !!($.me&&srv&&srv.ownerId&&($.me.id===srv.ownerId||$.me.id==='admin'));
+  $.ownerId=srv.ownerId||'';
+  $.perms=$.isAdmin?{manageChannels:true,manageServer:true,manageMembers:true,manageMessages:true,manageBots:true}:((srv.memberPerms&&$.me&&srv.memberPerms[$.me.id])||{});
+  $.permsMap=srv.memberPerms||{};
+  $.bots=Array.isArray(srv.bots)?srv.bots:[];
+  if('avatar' in srv) $.srvAva=srv.avatar||null;
 }
 
 function bootWithAva(sid,snm,avaData,serverData){
@@ -2073,6 +2104,7 @@ function boot(sid,snm,serverData=null){
   localStorage.setItem('morv_last_server',sid);
   routeToServer(sid);
   _inviteUrl='';
+  hideInviteNotFound();
   _banLockOn=false;
   localStorage.removeItem('morv_ban_lock');
   localStorage.removeItem('morv_ban_reason');
@@ -2178,6 +2210,7 @@ function renderChs(){
     const p=document.createElement('button');
     p.className='cat-plus';p.textContent='+';p.title=cat.botId?'Добавить бота':'Добавить канал';
     p.onclick=e=>{e.stopPropagation();cat.botId?openAddBot():showChSh(cat.id);};
+    p.style.display=(cat.botId?canManage('manageBots'):canManage('manageChannels'))?'flex':'none';
     h.appendChild(p);
     addLongPress(h, e=>showCtxCat(cat.id, e));
     sec.appendChild(h);
@@ -2238,7 +2271,7 @@ function switchCh(cid){
     initScrollBtn();
     const ro=ch.readonly===true;
     const ca=ch.coreApp===true;
-    document.getElementById('readonlyBar').style.display=(ro&&!ca)?'flex':'none';
+    document.getElementById('readonlyBar').style.display=((ro&&!ca)||(ca&&!$.isAdmin))?'flex':'none';
     document.getElementById('coreAppBar').style.display=(ca&&$.isAdmin)?'flex':'none';
     document.getElementById('chatInp').style.display=(ro||ca)?'none':'';
     document.getElementById('sndBtn').style.display=(ro||ca)?'none':'';
@@ -2434,9 +2467,12 @@ function renderMsgs(){
       }
       if(m.replyTo){
         const rq=document.createElement('div'); rq.className='reply-quote';
-        const rqText=m.replyTo.text.replace(/\{\{[^}]+\}\}/g,'🔒 зашифровано');
-        rq.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span><strong style="color:var(--a2)">${esc(m.replyTo.author)}</strong>: ${esc(rqText.slice(0,60))}${rqText.length>60?'…':''}</span>`;
-        rq.onclick=e=>{e.stopPropagation();const el=box.querySelector(`[data-mid="${m.replyTo.id}"]`);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.background='rgba(43,209,255,.12)';setTimeout(()=>el.style.background='',800);}};
+        const linked=box.querySelector(`[data-mid="${m.replyTo.id}"]`);
+        const deleted=!!(m.replyTo.deleted||!linked);
+        const baseText=deleted?'Сообщение удалено':String(m.replyTo.text||'');
+        const rqText=baseText.replace(/\{\{[^}]+\}\}/g,'🔒 зашифровано');
+        rq.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span><strong style="color:var(--a2)">${esc(m.replyTo.author||'пользователь')}</strong>: ${esc(rqText.slice(0,60))}${rqText.length>60?'…':''}</span>`;
+        rq.onclick=e=>{e.stopPropagation();const el=box.querySelector(`[data-mid="${m.replyTo.id}"]`);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.background='rgba(43,209,255,.12)';setTimeout(()=>el.style.background='',800);} else { toast('Сообщение больше не существует'); }};
         rq.addEventListener('touchstart',e=>e.stopPropagation(),{passive:true});
         g.appendChild(rq);
       }
@@ -2564,11 +2600,12 @@ async function send(){
   }
 
   if($.editMsgId){
-    const msg=($.msgs[cid]||[]).find(m=>m.id===$.editMsgId);
-    if(msg){msg.text=txt; msg.edited=true;}
-    cancelEdit();
-    renderMsgs(); scrollDn();
-    return;
+    try{
+      await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages/'+$.editMsgId+'/update',{method:'POST',auth:true,body:{text:txt}});
+      cancelEdit();
+      inp.value=''; inp.style.height='';
+      return;
+    }catch(e){ toast('Ошибка редактирования'); return; }
   }
 
   if($.editSchedId){
@@ -2682,7 +2719,17 @@ function connectRealtime(){
   if(_sock){ try{ _sock.disconnect(); }catch(e){} _sock=null; }
   _sock=io({auth:{token:API.token}});
   _sock.on('connect',()=>{ _sock.emit('server:join',{serverId:$.sid}); });
-  _sock.on('server:update',(srv)=>{ if(srv&&srv.id===$.sid){ applyServerData(srv,true); renderChs(); if($.cur) renderMsgs(); } });
+  _sock.on('server:update',(srv)=>{
+    if(srv&&srv.id===$.sid){
+      applyServerData(srv,true);
+      document.getElementById('srvNm').textContent=srv.name||$.snm;
+      const avaEl=document.getElementById('srvAva');
+      if($.srvAva){ avaEl.innerHTML=`<img src="${$.srvAva}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">`; }
+      else { avaEl.innerHTML=''; avaEl.textContent=(srv.name||'S')[0].toUpperCase(); }
+      renderChs();
+      if($.cur) renderMsgs();
+    }
+  });
   _sock.on('server:deleted',({serverId})=>{
     if(serverId!==$.sid) return;
     localStorage.removeItem('morv_last_server');
@@ -2703,6 +2750,17 @@ function connectRealtime(){
     if(serverId!==$.sid) return;
     const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId);
     if(msg){ msg.reactions=reactions||{}; if($.cur===channelId) renderMsgs(); }
+  });
+  _sock.on('message:update',({serverId,channelId,messageId,text,edited})=>{
+    if(serverId!==$.sid) return;
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId);
+    if(msg){ msg.text=text||msg.text; msg.edited=!!edited; if($.cur===channelId) renderMsgs(); }
+  });
+  _sock.on('message:delete',({serverId,channelId,messageId})=>{
+    if(serverId!==$.sid) return;
+    $.msgs[channelId]=($.msgs[channelId]||[]).filter(m=>m.id!==messageId);
+    $.pinned[channelId]=($.pinned[channelId]||[]).filter(x=>x!==messageId);
+    if($.cur===channelId){ renderMsgs(); updatePinnedBanner(channelId); }
   });
   _sock.on('message:pin',({serverId,channelId,messageId,pinned})=>{
     if(serverId!==$.sid) return;
@@ -2786,14 +2844,9 @@ function doSchedule(){
 function deliverScheduled(id){
   const idx=$.scheduled.findIndex(s=>s.id===id); if(idx<0)return;
   const sched=$.scheduled.splice(idx,1)[0];
-  if(!$.msgs[sched.cid]) $.msgs[sched.cid]=[];
-  const msg={id,aid:$.me.id,author:$.me.name,text:sched.text,ts:Date.now(),reactions:{}};
-  if(sched.replyTo) msg.replyTo=sched.replyTo;
-  $.msgs[sched.cid].push(msg);
-  if($.cur===sched.cid){renderMsgs();scrollDnIfAtBottom();}
-  else{$.unread[sched.cid]=($.unread[sched.cid]||0)+1; renderChs();}
-  updateSchedBtn();
-  toast('✉️ Отложенное сообщение отправлено');
+  apiReq('/api/servers/'+$.sid+'/channels/'+sched.cid+'/messages',{method:'POST',auth:true,body:{text:sched.text,replyTo:sched.replyTo||null}})
+    .then(()=>{ updateSchedBtn(); toast('✉️ Отложенное сообщение отправлено'); })
+    .catch(()=>{ toast('Ошибка отправки отложенного'); updateSchedBtn(); });
 }
 
 function updateSchedBtn(){
@@ -2876,9 +2929,8 @@ function doReschedule(){
 // ── Delete msg ──
 function deleteMsg(mid){
   const cid=$.cur;
-  $.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.id!==mid);
-  if($.pinned[cid]){$.pinned[cid]=$.pinned[cid].filter(p=>p!==mid);updatePinnedBanner(cid);}
-  renderMsgs();
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages/'+mid+'/delete',{method:'POST',auth:true})
+    .catch(()=>toast('Ошибка удаления'));
 }
 
 // ── Voice ──
@@ -2969,21 +3021,42 @@ function showMembers(){
     i.innerHTML=`<div class="m-ava">${m.emoji}<div class="m-dot"></div></div>
       <div style="flex:1;min-width:0;"><div class="m-nm"><span>${m.you?'вы':m.name}</span></div>${m.you?'<div class="m-you">это вы</div>':''}</div>${prefix?`<span class="m-prefix">${esc(prefix)}</span>`:''}`;
     addLongPress(i, e=>{
-      showCtx([{
+      const actions=[{
         icon:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`,
         label: prefix ? 'Изменить префикс' : 'Задать префикс',
         action:()=>openPrefixSheet(m.id)
-      },
-      ...(prefix?[{
+      }];
+      if(prefix) actions.push({
         icon:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><line x1="9" y1="6" x2="9.01" y2="3"/><line x1="15" y1="6" x2="14.99" y2="3"/></svg>`,
         label:'Удалить префикс',
         action:()=>{delete $.prefixes[m.id];showMembers();renderMsgs();toast('Префикс удалён');}
-      }]:[])
-      ], e.touches?e.touches[0]:e);
+      });
+      if(canManage('manageMembers')&&!m.you&&m.id!==($.ownerId||'')){
+        actions.push({icon:_delSvg,label:'Удалить участника',danger:true,action:()=>removeMember(m.id)});
+        actions.push({icon:_editSvg,label:'Права участника',action:()=>editMemberPerms(m.id)});
+      }
+      showCtx(actions, e.touches?e.touches[0]:e);
     });
     l.appendChild(i);
   });
   openSh('sh-mem');
+}
+
+async function removeMember(memberId){
+  try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/remove',{method:'POST',auth:true}); toast('Участник удалён'); }
+  catch(e){ toast('Ошибка удаления участника'); }
+}
+async function editMemberPerms(memberId){
+  const cur=($.permsMap&&$.permsMap[memberId])||{};
+  const next={
+    manageChannels:confirm('Разрешить управление каналами/разделами?'),
+    manageServer:confirm('Разрешить редактирование сервера?'),
+    manageMembers:confirm('Разрешить управление участниками?'),
+    manageMessages:confirm('Разрешить удалять/редактировать чужие сообщения?'),
+    manageBots:confirm('Разрешить управление ботами?'),
+  };
+  try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/permissions',{method:'POST',auth:true,body:next}); toast('Права обновлены'); }
+  catch(e){ toast('Ошибка обновления прав'); }
 }
 
 let _prefixMemberId=null;
@@ -3037,7 +3110,7 @@ function drawQR(text){
   const img=new Image();
   img.onload=()=>{ ctx.drawImage(img,0,0,canvas.width,canvas.height); };
   img.onerror=()=>{ ctx.fillStyle='#2BD1FF'; ctx.fillRect(16,16,168,168); };
-  img.src='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(text);
+  img.src='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(text);
 }
 
 // ── Bots ──
@@ -3052,6 +3125,7 @@ const BOT_REGISTRY={
 };
 
 function openAddBot(){
+  if(!canManage('manageBots')){ toast('Недостаточно прав'); return; }
   document.querySelectorAll('.bot-code-cell').forEach(c=>c.value='');
   openSh('sh-addbot');
   setTimeout(()=>document.querySelectorAll('.bot-code-cell')[0].focus(),300);
@@ -3080,62 +3154,26 @@ function _ensureBotCat(){
   return cat;
 }
 
-function addBot(){
+async function addBot(){
   const cells=document.querySelectorAll('.bot-code-cell');
   const code=Array.from(cells).map(c=>c.value).join('');
   if(code.length<6){toast('Введите все 6 цифр');return;}
   const info=BOT_REGISTRY[code];
   if(!info){toast('Неверный код бота');return;}
   if($.bots.find(b=>b.code===code)){toast('Этот бот уже добавлен');return;}
-  const botId=gid();
-  $.bots.push({id:botId,code,...info});
-  closeSh('sh-addbot');
-  showMembers();
-  toast(`Бот ${info.name} добавлен`);
-
-  if(code==='111111'||code==='222222'||code==='857341'){
-    const cat=_ensureBotCat();
-    const chId='bot-ch-'+botId;
-    const isStat=code==='222222';
-    const isCC=code==='857341';
-    $.chs[chId]={id:chId,name:isCC?'control-center':isStat?'статистика':'приветствие',type:'text',cat:cat.id,desc:'',readonly:true,botId,coreApp:(isStat||isCC)?true:false};
-    $.msgs[chId]=[]; $.unread[chId]=0; $.pinned[chId]=[];
-    if(!isStat&&!isCC){
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'приветствие_bot',
-        text:`👋 Привет всем! В этом канале будут появляться уведомления о новых участниках. Например: @участник зашёл на сервер.`,
-        ts:Date.now(),reactions:{}});
-    } else if(isStat){
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'статистика_bot',
-        text:`📈 Привет! Я бот Статистика. Открой приложение чтобы увидеть подробную статистику сервера — количество сообщений, участников, активность по каналам и многое другое.`,
-        ts:Date.now(),reactions:{}});
-    } else {
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'control_center_bot',
-        text:`🛡 Control Center активирован. Открой панель управления для администрирования сервера — управление участниками, лог действий, быстрые команды и настройки безопасности.`,
-        ts:Date.now(),reactions:{}});
-    }
-    renderChs();
-  } else if($.cur){
-    $.msgs[$.cur].push({id:gid(),aid:'bot-'+botId,author:info.name,text:`${info.emoji} Привет! Я бот ${info.name}. ${info.desc}.`,ts:Date.now(),reactions:{}});
-    renderMsgs(); scrollDn();
-  }
+  try{
+    const channelName=(code==='857341'?'control-center':(code==='222222'?'статистика':(code==='111111'?'приветствие':'')));
+    await apiReq('/api/servers/'+$.sid+'/bots/add',{method:'POST',auth:true,body:{code,name:info.name,emoji:info.emoji,desc:info.desc,coreApp:!!info.coreApp,channelName}});
+    closeSh('sh-addbot');
+    toast(`Бот ${info.name} добавлен`);
+  }catch(e){ toast(e.status===409?'Этот бот уже добавлен':'Ошибка добавления бота'); }
 }
 
 function removeBot(id){
-  const bot=$.bots.find(b=>b.id===id);
-  if(!bot){return;}
-  const botCh=Object.values($.chs).find(c=>c.botId===id);
-  if(botCh){
-    if($.cur===botCh.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-    delete $.chs[botCh.id]; delete $.msgs[botCh.id]; delete $.pinned[botCh.id];
-  }
-  const cat=$.cats.find(c=>c.isBotCat);
-  if(cat){
-    const remaining=Object.values($.chs).filter(c=>c.cat===cat.id);
-    if(!remaining.length) $.cats=$.cats.filter(c=>!c.isBotCat);
-  }
-  $.bots=$.bots.filter(b=>b.id!==id);
-  showMembers(); renderChs(); renderBotList();
-  if(bot) toast(`Бот ${bot.name} удалён`);
+  if(!canManage('manageBots')){ toast('Недостаточно прав'); return; }
+  apiReq('/api/servers/'+$.sid+'/bots/'+id+'/remove',{method:'POST',auth:true})
+    .then(()=>toast('Бот удалён'))
+    .catch(()=>toast('Ошибка удаления бота'));
 }
 function renderBotList(){
   const list=document.getElementById('botList');
@@ -3164,7 +3202,7 @@ function renderBotList(){
 
 // ── Channel sheet ──
 function showChSh(catId){
-  if(!$.isAdmin){ toast('Только администратор может добавлять каналы'); return; }
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   $.newCat=catId; $.newType='text';
   document.getElementById('tcTxt').classList.add('on');
   document.getElementById('tcVc').classList.remove('on');
@@ -3179,7 +3217,7 @@ function selType(t){
   document.getElementById('tcVc').classList.toggle('on',t==='voice');
 }
 async function doMakeCh(){
-  if(!$.isAdmin){ toast('Только администратор может добавлять каналы'); return; }
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   const raw=document.getElementById('chNm').value.trim();
   if(!raw){document.getElementById('chNm').focus();return;}
   const nm=raw.toLowerCase().replace(/\s+/g,'-');
@@ -3205,7 +3243,7 @@ function showCatSh(){
   setTimeout(()=>document.getElementById('catNm').focus(),300);
 }
 async function doMakeCat(){
-  if(!$.isAdmin){ toast('Только администратор может добавлять разделы'); return; }
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   const nm=document.getElementById('catNm').value.trim().toUpperCase();
   if(!nm){document.getElementById('catNm').focus();return;}
   try{
@@ -3265,6 +3303,7 @@ const _delSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" strok
 const _addSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
 
 function showCtxCh(cid, e){
+  if(!canManage('manageChannels')) return;
   showCtx([
     {icon:_editSvg, label:'Переименовать', action:()=>openEditCh(cid)},
     {icon:_delSvg,  label:'Удалить канал', danger:true, action:()=>deleteCh(cid)},
@@ -3274,6 +3313,7 @@ function showCtxCh(cid, e){
 const _pinSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>`;
 
 function showCtxCat(catId, e){
+  if(!canManage('manageChannels') && !canManage('manageBots')) return;
   const cat=$.cats.find(c=>c.id===catId);
   const addItem=cat&&cat.botId
     ? {icon:_addSvg, label:'Добавить бота', action:()=>openAddBot()}
@@ -3316,10 +3356,9 @@ function doEditCh(){
   if(!raw){document.getElementById('echNm').focus();return;}
   const nm=raw.toLowerCase().replace(/\s+/g,'-');
   const ds=document.getElementById('echDs').value.trim();
-  $.chs[_editChId].name=nm; $.chs[_editChId].desc=ds;
-  closeSh('sh-ech'); renderChs();
-  if($.cur===_editChId) setTb(($.chs[_editChId].type==='voice'?'🔊 ':'#')+nm,true,$.chs[_editChId].type!=='voice');
-  toast('Канал обновлён');
+  apiReq('/api/servers/'+$.sid+'/channels/'+_editChId+'/update',{method:'POST',auth:true,body:{name:nm,desc:ds}})
+    .then(()=>{ closeSh('sh-ech'); toast('Канал обновлён'); })
+    .catch(()=>toast('Ошибка обновления канала'));
 }
 
 function _botDelConfirm(title, action){
@@ -3332,42 +3371,34 @@ function deleteCh(cid){
   const ch=$.chs[cid];
   if(ch&&ch.botId){
     _botDelConfirm('Удалить канал бота?',()=>{
-      $.bots=$.bots.filter(b=>b.id!==ch.botId);
-      if($.cur===cid){$.cur=null;setView('ch');setTb('morv',false,false);}
-      delete $.chs[cid]; delete $.msgs[cid];
-      const cat=$.cats.find(c=>c.isBotCat);
-      if(cat&&!Object.values($.chs).some(c=>c.cat===cat.id)){
-        $.cats=$.cats.filter(c=>!c.isBotCat);
-      }
-      renderChs(); renderBotList(); toast('Канал удалён');
+      apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/delete',{method:'POST',auth:true})
+        .then(()=>toast('Канал удалён'))
+        .catch(()=>toast('Ошибка удаления канала'));
     });
     return;
   }
-  delete $.chs[cid]; delete $.msgs[cid];
-  if($.cur===cid){$.cur=null;setView('ch');setTb('morv',false,false);}
-  renderChs(); renderBotList(); toast('Канал удалён');
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/delete',{method:'POST',auth:true})
+    .then(()=>toast('Канал удалён'))
+    .catch(()=>toast('Ошибка удаления канала'));
 }
 
 function deleteCat(catId){
   const cat=$.cats.find(c=>c.id===catId);
   if(cat&&cat.isBotCat){
     _botDelConfirm('Удалить раздел ботов?',()=>{
-      Object.values($.chs).filter(c=>c.cat===catId).forEach(c=>{
-        if(c.botId) $.bots=$.bots.filter(b=>b.id!==c.botId);
-        if($.cur===c.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-        delete $.chs[c.id]; delete $.msgs[c.id];
-      });
-      $.cats=$.cats.filter(c=>c.id!==catId);
-      renderChs(); renderBotList(); toast('Раздел удалён');
+      const secIndex=Number.isInteger(cat.serverSecIndex)?cat.serverSecIndex:-1;
+      if(secIndex<0){ toast('Раздел не найден'); return; }
+      apiReq('/api/servers/'+$.sid+'/sections/'+secIndex+'/delete',{method:'POST',auth:true})
+        .then(()=>toast('Раздел удалён'))
+        .catch(()=>toast('Ошибка удаления раздела'));
     });
     return;
   }
-  Object.values($.chs).filter(c=>c.cat===catId).forEach(c=>{
-    if($.cur===c.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-    delete $.chs[c.id]; delete $.msgs[c.id];
-  });
-  $.cats=$.cats.filter(c=>c.id!==catId);
-  renderChs(); renderBotList(); toast('Раздел удалён');
+  const secIndex=cat&&Number.isInteger(cat.serverSecIndex)?cat.serverSecIndex:-1;
+  if(secIndex<0){ toast('Раздел не найден'); return; }
+  apiReq('/api/servers/'+$.sid+'/sections/'+secIndex+'/delete',{method:'POST',auth:true})
+    .then(()=>toast('Раздел удалён'))
+    .catch(()=>toast('Ошибка удаления раздела'));
 }
 let _editCatId=null;
 function openEditCat(catId){
@@ -3381,8 +3412,10 @@ function doEditCat(){
   const nm=document.getElementById('ecatNm').value.trim().toUpperCase();
   if(!nm){document.getElementById('ecatNm').focus();return;}
   const cat=$.cats.find(c=>c.id===_editCatId);
-  cat.name=nm;
-  closeSh('sh-ecat'); renderChs(); toast('Раздел обновлён');
+  if(!cat||!Number.isInteger(cat.serverSecIndex)){ toast('Раздел не найден'); return; }
+  apiReq('/api/servers/'+$.sid+'/sections/'+cat.serverSecIndex+'/update',{method:'POST',auth:true,body:{name:nm}})
+    .then(()=>{ closeSh('sh-ecat'); toast('Раздел обновлён'); })
+    .catch(()=>toast('Ошибка обновления раздела'));
 }
 
 // ── Server info ──
@@ -3711,6 +3744,7 @@ window.onerror = function(msg, src, line, col, err) {
 document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
   startStatePoll();
+  hideInviteNotFound();
   const pth=location.pathname||'';
   if(localStorage.getItem('morv_ban_lock')==='1'){
     _banLockOn=true;
@@ -3730,8 +3764,8 @@ document.addEventListener('DOMContentLoaded',async ()=>{
       try{
         const j=await apiReq('/api/invites/'+invM[1]+'/join',{method:'POST',auth:true});
         const srv=await getMyServerById(j.serverId);
-        if(srv) boot(srv.id,srv.name,srv); else { toast('Сервер не найден'); history.replaceState({},'','/login'); }
-      }catch(e){ toast('Сервер не найден'); history.replaceState({},'','/login'); }
+        if(srv) boot(srv.id,srv.name,srv); else showInviteNotFound();
+      }catch(e){ showInviteNotFound(); }
     } else if(srvM){
       const srv=await getMyServerById(srvM[1]);
       if(srv) boot(srv.id,srv.name,srv); else { toast('Сервер не найден'); history.replaceState({},'','/login'); }
@@ -3781,9 +3815,10 @@ document.addEventListener('DOMContentLoaded',async ()=>{
 function openCoreApp(){
   const ch=$.chs[$.cur];
   if(!ch||!ch.coreApp) return;
+  if(!$.isAdmin){ toast('В этот канал нельзя писать'); return; }
   const body=document.getElementById('coreAppBody');
   // Route to Control Center if this is the CC bot channel
-  const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341');
+  const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341') || ((ch.name||'').toLowerCase()==='control-center'?{id:ch.botId||'cc',code:'857341'}:null);
   if(bot){ renderControlCenter(body); document.getElementById('coreAppOverlay').classList.add('on'); return; }
   const msgs=Object.values($.msgs).flat();
   const totalMsgs=msgs.filter(m=>!m.sys).length;
