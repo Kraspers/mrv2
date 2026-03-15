@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>morv</title>
+<link rel="preload" href="/loading.png" as="image">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -37,7 +38,7 @@ html, body {
 /* ═══ LANDING ═══ */
 #landing {
   position: fixed; inset: 0;
-  display: flex; flex-direction: column;
+  display: none; flex-direction: column;
   justify-content: flex-end;
   background: var(--bg);
   animation: up .5s cubic-bezier(.16,1,.3,1);
@@ -577,6 +578,25 @@ html, body {
 }
 .toast.on { opacity:1; transform:translateX(-50%) translateY(0); }
 
+.vc-toast-top{ top:calc(14px + var(--safe)); bottom:auto; z-index:1200; }
+.app-loading {
+  position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
+  background:rgba(10,11,14,.84); backdrop-filter:blur(6px);
+}
+.app-loading.on{ display:flex; }
+.app-loading-box{ display:flex; align-items:center; justify-content:center; }
+.app-loading-photo{ width:94px; height:94px; object-fit:contain; animation:spin 1.05s linear infinite; filter:drop-shadow(0 8px 18px rgba(0,0,0,.35)); }
+@keyframes spin { to{ transform:rotate(360deg);} }
+.perm-grid{ display:grid; gap:8px; margin-top:8px; }
+.perm-item{ display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:var(--s2); border:1px solid var(--b1); border-radius:10px; font-size:13px; }
+.perm-check{ position:relative; width:20px; height:20px; }
+.perm-check input{ position:absolute; inset:0; opacity:0; }
+.perm-check span{ position:absolute; inset:0; border-radius:6px; border:1px solid var(--b2); background:var(--s3); transition:.16s; }
+.perm-check span::after{ content:""; position:absolute; left:6px; top:2px; width:5px; height:10px; border:2px solid transparent; border-top:0; border-left:0; transform:rotate(45deg) scale(.7); opacity:0; transition:.16s; }
+.perm-check input:checked + span{ background:linear-gradient(135deg,#2bd1ff,#6ea8ff); border-color:transparent; }
+.perm-check input:checked + span::after{ border-color:#fff; opacity:1; transform:rotate(45deg) scale(1); }
+
+
 /* Active format badge */
 .fmt-active {
   position:absolute; top:-22px; right:0;
@@ -1104,7 +1124,7 @@ html, body {
       </div>
       <div id="chList"></div>
       <div class="add-cat-wrap">
-        <button class="add-cat-btn" onclick="showCatSh()">+ добавить раздел</button>
+        <button class="add-cat-btn" id="addCatBtn" onclick="showCatSh()">+ добавить раздел</button>
       </div>
       <div class="sidebar-account" id="sidebarAccount" style="display:none;">
         <div class="sidebar-account-ava" id="sidebarAva">🦊</div>
@@ -1416,7 +1436,7 @@ html, body {
     <div class="sh-handle"></div>
     <h3>Участники</h3>
     <p id="memCnt">0 онлайн</p>
-    <button class="bot-add-btn" onclick="openAddBot()">
+    <button class="bot-add-btn" id="memAddBotBtn" onclick="openAddBot()">
       <span class="bot-add-ic">+</span>
       Добавить бота
     </button>
@@ -1463,7 +1483,7 @@ html, body {
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;">
           <div style="font-size:18px;font-weight:800;" id="srvNmSh">morv</div>
-          <button onclick="closeSh('sh-srv');openEditSrv();" style="background:none;border:none;color:var(--t3);cursor:pointer;padding:2px;display:flex;align-items:center;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+          <button id="srvEditBtn" onclick="closeSh('sh-srv');openEditSrv();" style="background:none;border:none;color:var(--t3);cursor:pointer;padding:2px;display:flex;align-items:center;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
         </div>
         <div style="font-size:11px;color:var(--t3);margin-top:3px;" id="srvIdSh">ID: xxxxxxxx</div>
       </div>
@@ -1632,6 +1652,26 @@ html, body {
   </div>
 </div>
 
+
+<div class="sh-bg" id="sh-member-perms" onclick="closeSh('sh-member-perms')">
+  <div class="sheet" onclick="event.stopPropagation()">
+    <div class="sh-handle"></div>
+    <h3>Права участника</h3>
+    <p id="memberPermTitle">Настройка прав</p>
+    <div class="perm-grid">
+      <label class="perm-item">Управление каналами <span class="perm-check"><input type="checkbox" id="permManageChannels"><span></span></span></label>
+      <label class="perm-item">Редактирование сервера <span class="perm-check"><input type="checkbox" id="permManageServer"><span></span></span></label>
+      <label class="perm-item">Управление участниками <span class="perm-check"><input type="checkbox" id="permManageMembers"><span></span></span></label>
+      <label class="perm-item">Управление сообщениями <span class="perm-check"><input type="checkbox" id="permManageMessages"><span></span></span></label>
+      <label class="perm-item">Управление ботами <span class="perm-check"><input type="checkbox" id="permManageBots"><span></span></span></label>
+    </div>
+    <div class="s-row" style="margin-top:14px;">
+      <button class="s-can" onclick="closeSh('sh-member-perms')">Отмена</button>
+      <button class="s-ok" onclick="saveMemberPerms()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <!-- Seed phrase add/edit -->
 <div class="sh-bg" id="sh-seed" onclick="closeSh('sh-seed')">
   <div class="sheet" onclick="event.stopPropagation()">
@@ -1684,7 +1724,7 @@ html, body {
     <h3>QR-код приглашения</h3>
     <p>Отсканируйте чтобы присоединиться</p>
     <div style="display:flex;justify-content:center;padding:8px 0 16px;">
-      <canvas id="qrCanvas" width="160" height="160" style="border-radius:12px;"></canvas>
+      <canvas id="qrCanvas" width="184" height="184" style="border-radius:12px;padding:12px;background:#fff;"></canvas>
     </div>
     <div style="text-align:center;font-size:11px;color:var(--t3);margin-bottom:8px;" id="qrLink"></div>
     <div class="s-row">
@@ -1715,6 +1755,7 @@ html, body {
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="app-loading on" id="appLoading"><div class="app-loading-box"><img class="app-loading-photo" id="appLoadingPhoto" src="/loading.png" alt="loading"></div></div>
 <div class="sh-bg" id="sh-cc-announce" style="z-index:400;" onclick="closeSh('sh-cc-announce')">
   <div class="sheet" onclick="event.stopPropagation()">
     <div class="sh-handle"></div>
@@ -1759,6 +1800,8 @@ let $ = {
   prefixes:{},
   isAdmin:false,
   perms:{},
+  vcState:{},
+  vcPeers:{},
 };
 let _sock=null;
 
@@ -1824,6 +1867,11 @@ function toast(m){
 }
 const openSh=id=>document.getElementById(id).classList.add('on');
 const closeSh=id=>document.getElementById(id).classList.remove('on');
+function setLoading(on){
+  const el=document.getElementById('appLoading');
+  if(!el) return;
+  el.classList[on?'add':'remove']('on');
+}
 let _banLockOn=false;
 let _banReason='';
 function _renderBanScreen(){
@@ -1869,11 +1917,27 @@ function canManage(perm){
   return !!($.isAdmin||($.perms&&$.perms[perm]));
 }
 
+function getCookie(name){
+  const m=document.cookie.match(new RegExp('(?:^|; )'+name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&')+'=([^;]*)'));
+  return m?decodeURIComponent(m[1]):'';
+}
+function setCookie(name,val,days=3650){
+  const d=new Date(Date.now()+days*86400000);
+  document.cookie=`${name}=${encodeURIComponent(val)}; expires=${d.toUTCString()}; path=/; SameSite=Lax`;
+}
+function getPersistedDeviceCode(){
+  let v='';
+  try{ v=localStorage.getItem('morv_device_code')||''; }catch(e){}
+  if(!v) v=getCookie('morv_device_code')||'';
+  if(!v) v=gid(24);
+  try{ localStorage.setItem('morv_device_code',v); }catch(e){}
+  setCookie('morv_device_code',v);
+  return v;
+}
 const API={
   token: localStorage.getItem('morv_token')||'',
-  deviceCode: localStorage.getItem('morv_device_code')||gid(24),
+  deviceCode: getPersistedDeviceCode(),
 };
-localStorage.setItem('morv_device_code',API.deviceCode);
 
 async function apiReq(path, opts={}){
   const doFetch=async()=>{
@@ -1912,6 +1976,7 @@ async function ensureSession(force=false){
   if(API.token && !force) return API.token;
   const data=await apiReq('/api/auth/device',{method:'POST',body:{deviceCode:API.deviceCode}});
   API.token=data.token||'';
+  if(data&&data.deviceCode){ API.deviceCode=String(data.deviceCode); try{ localStorage.setItem('morv_device_code',API.deviceCode); }catch(e){} setCookie('morv_device_code',API.deviceCode); }
   if(API.token) localStorage.setItem('morv_token',API.token);
   if(data.user&&data.user.name){
     $.me={id:data.user.id,name:data.user.name,emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
@@ -1955,6 +2020,7 @@ async function doCreateServer(){
   const nm=document.getElementById('createSrvName').value.trim();
   const name=nm||('phantom-'+gid(4));
   try{
+    setLoading(true);
     await ensureSession();
     const data=await apiReq('/api/servers',{method:'POST',auth:true,body:{name,avatar:window._srvAvaData||null}});
     closeSh('sh-create');
@@ -1962,12 +2028,13 @@ async function doCreateServer(){
   }catch(e){
     if(e.status===401||e.status===403) toast('Ошибка авторизации. Войдите снова');
     else toast('Ошибка создания сервера');
-  }
+  } finally { setLoading(false); }
 }
 async function joinServer(){
   const v=document.getElementById('joinInput').value.trim();
   if(!v){document.getElementById('joinInput').focus();return;}
   try{
+    setLoading(true);
     await ensureSession();
     const inv=(v.match(/invite\/([a-z0-9]{10})/i)||v.match(/([a-z0-9]{10})$/i));
     if(inv){
@@ -1984,7 +2051,7 @@ async function joinServer(){
   }catch(e){
     if(e.status===404) toast('Сервер не найден');
     else toast('Ошибка входа');
-  }
+  } finally { setLoading(false); }
 }
 
 function openEditSrv(){
@@ -2086,8 +2153,12 @@ function applyServerData(srv, preserveBots){
   $.ownerId=srv.ownerId||'';
   $.perms=$.isAdmin?{manageChannels:true,manageServer:true,manageMembers:true,manageMessages:true,manageBots:true}:((srv.memberPerms&&$.me&&srv.memberPerms[$.me.id])||{});
   $.permsMap=srv.memberPerms||{};
+  $.prefixes=srv.prefixes||{};
   $.bots=Array.isArray(srv.bots)?srv.bots:[];
   if('avatar' in srv) $.srvAva=srv.avatar||null;
+  const addCatBtn=document.getElementById('addCatBtn'); if(addCatBtn) addCatBtn.style.display=canManage('manageChannels')?'':'none';
+  const memAddBotBtn=document.getElementById('memAddBotBtn'); if(memAddBotBtn) memAddBotBtn.style.display=canManage('manageBots')?'':'none';
+  const srvEditBtn=document.getElementById('srvEditBtn'); if(srvEditBtn) srvEditBtn.style.display=canManage('manageServer')?'':'none';
 }
 
 function bootWithAva(sid,snm,avaData,serverData){
@@ -2116,6 +2187,7 @@ function boot(sid,snm,serverData=null){
   if($.srvAva){
     avaEl.innerHTML=`<img src="${$.srvAva}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">`;
   } else {
+    avaEl.innerHTML='';
     avaEl.textContent=snm[0].toUpperCase();
   }
   document.getElementById('srvNm').textContent=snm;
@@ -2148,7 +2220,8 @@ async function pollServerState(){
   if(!_banLockOn && !$.sid) return;
   if(_banLockOn){
     try{
-      await ensureSession();
+      setLoading(true);
+    await ensureSession();
       const sid=localStorage.getItem('morv_last_server');
       if(sid){
         const srv=await getMyServerById(sid);
@@ -2258,6 +2331,7 @@ function switchCh(cid){
 
   if(ch.type==='voice'){
     document.getElementById('vcNm').textContent=ch.name;
+    if(_sock) _sock.emit('voice:join',{serverId:$.sid,channelId:cid});
     renderVcGrid();
     setView('vc');
     setTb('🔊 '+ch.name,true,false);
@@ -2771,6 +2845,42 @@ function connectRealtime(){
     const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId); if(msg) msg.pinned=!!pinned;
     if($.cur===channelId){ renderMsgs(); updatePinnedBanner(channelId); }
   });
+
+  _sock.on('member:permissions',({serverId,userId,permissions})=>{
+    if(serverId!==$.sid) return;
+    $.permsMap=$.permsMap||{};
+    $.permsMap[userId]=permissions||{};
+    if($.me&&userId===$.me.id){
+      $.perms=permissions||{};
+      const addCatBtn=document.getElementById('addCatBtn'); if(addCatBtn) addCatBtn.style.display=canManage('manageChannels')?'':'none';
+      const memAddBotBtn=document.getElementById('memAddBotBtn'); if(memAddBotBtn) memAddBotBtn.style.display=canManage('manageBots')?'':'none';
+      const srvEditBtn=document.getElementById('srvEditBtn'); if(srvEditBtn) srvEditBtn.style.display=canManage('manageServer')?'':'none';
+      renderChs();
+    }
+  });
+
+  _sock.on('prefix:update',({serverId,userId,prefix})=>{
+    if(serverId!==$.sid) return;
+    if(prefix) $.prefixes[userId]=prefix; else delete $.prefixes[userId];
+    if(document.getElementById('sh-mem').classList.contains('on')) showMembers();
+    if($.cur) renderMsgs();
+  });
+  _sock.on('server:activity',({type,name,channelType})=>{
+    if(type==='channel:created') toast((channelType==='voice'?'🔊 ':'#')+name+' создан');
+    if(type==='section:created') toast(name+' создан');
+    if(type==='bot:added') toast('🤖 '+name+' добавлен');
+  });
+  _sock.on('ban:update',({serverId,status,reason})=>{
+    if(serverId!==$.sid) return;
+    if(status==='banned') showBlocked(reason||'Доступ к Morv был ограничен');
+  });
+  _sock.on('voice:presence',({serverId,channelId,participants})=>{
+    if(serverId!==$.sid||!$.cur||$.cur!==channelId) return;
+    $.vcPeers={}; $.vcState={};
+    (participants||[]).forEach(p=>{ $.vcPeers[p.userId]=p; $.vcState[p.userId]={mute:!!p.mute,deaf:!!p.deaf}; });
+    renderVcGrid();
+  });
+
 }
 
 // ── Edit msg ──
@@ -2936,15 +3046,25 @@ function deleteMsg(mid){
 // ── Voice ──
 function renderVcGrid(){
   const g=document.getElementById('vcGrid'); g.innerHTML='';
-  const show=[$.me,...$.members.filter(m=>!m.you).slice(0,3)];
-  show.forEach(m=>{
+  const peers=Object.values($.vcPeers||{});
+  const ids=new Set(peers.map(p=>p.userId));
+  if($.me&&$.me.id) ids.add($.me.id);
+  [...ids].forEach(uid=>{
+    const m=($.members||[]).find(x=>x.id===uid)||(uid===$.me.id?$.me:null)||{id:uid,name:'user-'+String(uid).slice(0,6),emoji:'👤'};
+    const st=$.vcState[uid]||{};
     const c=document.createElement('div');
-    c.className='vc-card'+(m.you?' me':'');
-    c.id='vc-'+m.id;
-    c.innerHTML=`<div class="vc-face">${m.emoji}</div><div class="vc-nm">${m.you?'вы':m.name}</div>`;
+    c.className='vc-card'+(uid===$.me.id?' me':'')+(st.mute?' sp':'');
+    c.id='vc-'+uid;
+    c.innerHTML=`<div class="vc-face">${m.emoji||'👤'}</div><div class="vc-nm">${uid===$.me.id?'вы':m.name}${st.mute?' · 🔇':''}</div>`;
     g.appendChild(c);
   });
   clearInterval(window._vi);
+}
+function vcToast(msg){
+  const el=document.getElementById('toast');
+  el.classList.add('vc-toast-top');
+  toast(msg);
+  setTimeout(()=>el.classList.remove('vc-toast-top'),2200);
 }
 
 // ── Sounds ──
@@ -2990,7 +3110,8 @@ function toggleMic(){
     : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
   b.classList.toggle('mu',$.vcMu);
   playSound($.vcMu?'mute':'unmute');
-  toast($.vcMu?'Микрофон выключен':'Микрофон включён');
+if(_sock&&$.cur) _sock.emit('voice:state',{serverId:$.sid,channelId:$.cur,mute:$.vcMu,deaf:$.vcDf});
+  vcToast($.vcMu?'Микрофон выключен':'Микрофон включён');
 }
 function toggleDeaf(){
   $.vcDf=!$.vcDf;
@@ -3000,9 +3121,11 @@ function toggleDeaf(){
     : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>`;
   b.classList.toggle('mu',$.vcDf);
   playSound($.vcDf?'mute':'unmute');
-  toast($.vcDf?'Звук выключен':'Звук включён');
+if(_sock&&$.cur) _sock.emit('voice:state',{serverId:$.sid,channelId:$.cur,mute:$.vcMu,deaf:$.vcDf});
+  vcToast($.vcDf?'Звук выключен':'Звук включён');
 }
 function leaveVc(){
+  if(_sock&&$.cur) _sock.emit('voice:leave',{serverId:$.sid,channelId:$.cur});
   clearInterval(window._vi);
   const ft=Object.values($.chs).find(c=>c.type==='text');
   if(ft)switchCh(ft.id); else{setView('ch');setTb('morv',false,false);}
@@ -3029,7 +3152,7 @@ function showMembers(){
       if(prefix) actions.push({
         icon:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><line x1="9" y1="6" x2="9.01" y2="3"/><line x1="15" y1="6" x2="14.99" y2="3"/></svg>`,
         label:'Удалить префикс',
-        action:()=>{delete $.prefixes[m.id];showMembers();renderMsgs();toast('Префикс удалён');}
+        action:()=>savePrefixForMember(m.id,'')
       });
       if(canManage('manageMembers')&&!m.you&&m.id!==($.ownerId||'')){
         actions.push({icon:_delSvg,label:'Удалить участника',danger:true,action:()=>removeMember(m.id)});
@@ -3046,20 +3169,40 @@ async function removeMember(memberId){
   try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/remove',{method:'POST',auth:true}); toast('Участник удалён'); }
   catch(e){ toast('Ошибка удаления участника'); }
 }
-async function editMemberPerms(memberId){
+let _permMemberId=null;
+function editMemberPerms(memberId){
+  _permMemberId=memberId;
+  const mem=($.members||[]).find(m=>m.id===memberId);
+  document.getElementById('memberPermTitle').textContent='Права: '+(mem?mem.name:'участник');
   const cur=($.permsMap&&$.permsMap[memberId])||{};
+  document.getElementById('permManageChannels').checked=!!cur.manageChannels;
+  document.getElementById('permManageServer').checked=!!cur.manageServer;
+  document.getElementById('permManageMembers').checked=!!cur.manageMembers;
+  document.getElementById('permManageMessages').checked=!!cur.manageMessages;
+  document.getElementById('permManageBots').checked=!!cur.manageBots;
+  openSh('sh-member-perms');
+}
+async function saveMemberPerms(){
+  if(!_permMemberId) return;
   const next={
-    manageChannels:confirm('Разрешить управление каналами/разделами?'),
-    manageServer:confirm('Разрешить редактирование сервера?'),
-    manageMembers:confirm('Разрешить управление участниками?'),
-    manageMessages:confirm('Разрешить удалять/редактировать чужие сообщения?'),
-    manageBots:confirm('Разрешить управление ботами?'),
+    manageChannels:document.getElementById('permManageChannels').checked,
+    manageServer:document.getElementById('permManageServer').checked,
+    manageMembers:document.getElementById('permManageMembers').checked,
+    manageMessages:document.getElementById('permManageMessages').checked,
+    manageBots:document.getElementById('permManageBots').checked,
   };
-  try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/permissions',{method:'POST',auth:true,body:next}); toast('Права обновлены'); }
+  try{ await apiReq('/api/servers/'+$.sid+'/members/'+_permMemberId+'/permissions',{method:'POST',auth:true,body:next}); closeSh('sh-member-perms'); toast('Права обновлены'); }
   catch(e){ toast('Ошибка обновления прав'); }
 }
 
 let _prefixMemberId=null;
+async function savePrefixForMember(mid,val){
+  try{
+    await apiReq('/api/servers/'+$.sid+'/prefixes/'+mid,{method:'POST',auth:true,body:{prefix:val}});
+    if(val) $.prefixes[mid]=val; else delete $.prefixes[mid];
+    showMembers(); renderMsgs(); toast(val?'Префикс установлен':'Префикс удалён');
+  }catch(e){ toast('Ошибка префикса'); }
+}
 function openPrefixSheet(mid){
   _prefixMemberId=mid;
   document.getElementById('prefixInp').value=$.prefixes[mid]||'';
@@ -3068,12 +3211,8 @@ function openPrefixSheet(mid){
 }
 function savePrefix(){
   const val=document.getElementById('prefixInp').value.trim();
-  if(val) $.prefixes[_prefixMemberId]=val;
-  else delete $.prefixes[_prefixMemberId];
   closeSh('sh-prefix');
-  showMembers();
-  renderMsgs();
-  toast(val?'Префикс установлен':'Префикс удалён');
+  savePrefixForMember(_prefixMemberId,val);
 }
 
 // ── Invite ──
@@ -3108,8 +3247,8 @@ function drawQR(text){
   const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()||'#0e0e12';
   ctx.fillStyle=bg; ctx.fillRect(0,0,canvas.width,canvas.height);
   const img=new Image();
-  img.onload=()=>{ ctx.drawImage(img,0,0,canvas.width,canvas.height); };
-  img.onerror=()=>{ ctx.fillStyle='#2BD1FF'; ctx.fillRect(16,16,168,168); };
+  img.onload=()=>{ ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,12,12,160,160); };
+  img.onerror=()=>{ ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#2BD1FF'; ctx.fillRect(12,12,160,160); };
   img.src='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(text);
 }
 
@@ -3163,7 +3302,8 @@ async function addBot(){
   if($.bots.find(b=>b.code===code)){toast('Этот бот уже добавлен');return;}
   try{
     const channelName=(code==='857341'?'control-center':(code==='222222'?'статистика':(code==='111111'?'приветствие':'')));
-    await apiReq('/api/servers/'+$.sid+'/bots/add',{method:'POST',auth:true,body:{code,name:info.name,emoji:info.emoji,desc:info.desc,coreApp:!!info.coreApp,channelName}});
+    const sectionName=(code==='111111'?'ПРИВЕТСТВИЕ':(code==='857341'?'CONTROL CENTER':'БОТЫ'));
+    await apiReq('/api/servers/'+$.sid+'/bots/add',{method:'POST',auth:true,body:{code,name:info.name,emoji:info.emoji,desc:info.desc,coreApp:!!info.coreApp,channelName,sectionName}});
     closeSh('sh-addbot');
     toast(`Бот ${info.name} добавлен`);
   }catch(e){ toast(e.status===409?'Этот бот уже добавлен':'Ошибка добавления бота'); }
@@ -3742,6 +3882,7 @@ window.onerror = function(msg, src, line, col, err) {
 };
 
 document.addEventListener('DOMContentLoaded',async ()=>{
+  setLoading(true);
   applyAccent('#2BD1FF');
   startStatePoll();
   hideInviteNotFound();
@@ -3756,6 +3897,7 @@ document.addEventListener('DOMContentLoaded',async ()=>{
     document.getElementById('landing').style.display='none';
   }
   try{
+    setLoading(true);
     await ensureSession();
     const path=location.pathname||'';
     const srvM=path.match(/^\/servers\/(srv_[a-z0-9]{8}|[a-z0-9]{8})$/i);
@@ -3773,12 +3915,13 @@ document.addEventListener('DOMContentLoaded',async ()=>{
       const last=localStorage.getItem('morv_last_server');
       if(last){
         const srv=await getMyServerById(last);
-        if(srv) boot(srv.id,srv.name,srv); else document.getElementById('landing').style.display='flex';
+        if(srv) boot(srv.id,srv.name,srv); else if(!document.getElementById('app').classList.contains('on')) document.getElementById('landing').style.display='flex';
       } else {
         document.getElementById('landing').style.display='flex';
       }
     }
   }catch(e){}
+  setLoading(false);
   const btn=document.getElementById('sndBtn');
   if(!btn)return;
   let _t;
