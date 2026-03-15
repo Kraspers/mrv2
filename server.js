@@ -49,6 +49,15 @@ function loadData() {
 
 let db = loadData();
 if (!db.tombstones) db.tombstones = {};
+function ensureServerIntegrity(s) {
+  if (!s) return;
+  s.members = Array.isArray(s.members) ? s.members : [];
+  if (s.ownerId && !s.members.includes(s.ownerId)) s.members.push(s.ownerId);
+  s.memberPerms = s.memberPerms || {};
+  if (s.ownerId && s.memberPerms[s.ownerId]) delete s.memberPerms[s.ownerId];
+  s.prefixes = s.prefixes || {};
+}
+Object.values(db.servers || {}).forEach(ensureServerIntegrity);
 function save() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
 
 function isServerAdmin(userId, srv) {
@@ -82,8 +91,32 @@ function serializeServer(s) {
     status: s.status || 'active',
     bots: s.bots || [],
     memberPerms: s.memberPerms || {},
+    prefixes: s.prefixes || {},
     invite: s.invite || null,
   };
+}
+
+
+function pushSystemMessage(srv, text, opts = {}) {
+  const channels = Object.values(srv.channels || {});
+  let ch = null;
+  if (opts.channelId) ch = srv.channels?.[opts.channelId] || null;
+  if (!ch) ch = channels.find((c) => c.type === 'text' && c.botId) || null;
+  if (!ch) ch = channels.find((c) => c.type === 'text') || null;
+  if (!ch) return null;
+  const msg = {
+    id: gid(12),
+    authorId: opts.authorId || 'system',
+    ts: now(),
+    ciphertext: String(text || ''),
+    iv: '',
+    keyId: 'local',
+    reactions: {},
+    pinned: false,
+  };
+  ch.messages = Array.isArray(ch.messages) ? ch.messages : [];
+  ch.messages.push(msg);
+  return { channelId: ch.id, msg };
 }
 
 function deleteServerEverywhere(serverId) {
@@ -125,6 +158,7 @@ setInterval(() => {
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: CORS_ORIGIN } });
+const voiceState = {}; // key: serverId:channelId -> { userId: { mute, deaf } }
 
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
@@ -169,7 +203,7 @@ app.post('/api/auth/device', (req, res) => {
   const token = gid(36);
   db.sessions[token] = { token, userId: user.id, ip, createdAt: now() };
   save();
-  res.json({ token, user: { id: user.id, name: user.name } });
+  res.json({ token, deviceCode: user.deviceCode || deviceCode, user: { id: user.id, name: user.name } });
 });
 
 app.post('/api/panic', auth, (req, res) => {
@@ -199,6 +233,7 @@ app.post('/api/servers', auth, (req, res) => {
     channels: {},
     members: [req.user.id],
     memberPerms: {},
+    prefixes: {},
     bots: [],
     createdAt: now(),
     status: 'active',
@@ -227,8 +262,11 @@ app.post('/api/servers/:id/sections', auth, (req, res) => {
   if (!name) return res.status(400).json({ error: 'bad section name' });
   s.sections = Array.isArray(s.sections) ? s.sections : [];
   s.sections.push({ name, channels: [] });
+  const activity = pushSystemMessage(s, `📁 Раздел ${name} создан`);
   save();
   io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  io.to(`server:${s.id}`).emit('server:activity', { type: 'section:created', name });
+  if (activity) io.to(`server:${s.id}`).emit('message:new', { serverId: s.id, channelId: activity.channelId, msg: activity.msg });
   res.json({ server: serializeServer(s) });
 });
 
@@ -245,8 +283,11 @@ app.post('/api/servers/:id/channels', auth, (req, res) => {
   s.channels[cid] = { id: cid, name, type, messages: [] };
   s.sections[secIndex].channels = Array.isArray(s.sections[secIndex].channels) ? s.sections[secIndex].channels : [];
   s.sections[secIndex].channels.push({ id: cid, name, type: type === 'voice' ? 'голос' : 'текст' });
+  const activity = pushSystemMessage(s, `${type === 'voice' ? '🔊' : '#'} ${name} создан`, { channelId: type === 'text' ? cid : undefined });
   save();
   io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  io.to(`server:${s.id}`).emit('server:activity', { type: 'channel:created', name, channelType: type });
+  if (activity) io.to(`server:${s.id}`).emit('message:new', { serverId: s.id, channelId: activity.channelId, msg: activity.msg });
   res.json({ server: serializeServer(s), channel: s.channels[cid] });
 });
 
@@ -445,8 +486,25 @@ app.post('/api/servers/:id/members/:userId/permissions', auth, (req, res) => {
     manageBots: !!req.body.manageBots,
   };
   save();
+  io.to(`server:${s.id}`).emit('member:permissions', { serverId: s.id, userId: uid, permissions: s.memberPerms[uid] });
   io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
   res.json({ ok: true, permissions: s.memberPerms[uid] });
+});
+
+app.post('/api/servers/:id/prefixes/:userId', auth, (req, res) => {
+  const s = db.servers[req.params.id];
+  const uid = req.params.userId;
+  if (!s || !s.members.includes(req.user.id)) return res.status(404).json({ error: 'server not found' });
+  if (!s.members.includes(uid)) return res.status(404).json({ error: 'member not found' });
+  if (!(req.user.id === uid || canManage(req.user.id, s, 'manageMembers'))) return res.status(403).json({ error: 'forbidden' });
+  const value = String(req.body.prefix || '').trim();
+  s.prefixes = s.prefixes || {};
+  if (value) s.prefixes[uid] = value.slice(0, 24);
+  else delete s.prefixes[uid];
+  save();
+  io.to(`server:${s.id}`).emit('prefix:update', { serverId: s.id, userId: uid, prefix: s.prefixes[uid] || '' });
+  io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  res.json({ ok: true, prefix: s.prefixes[uid] || '' });
 });
 
 app.post('/api/servers/:id/bots/add', auth, (req, res) => {
@@ -461,17 +519,36 @@ app.post('/api/servers/:id/bots/add', auth, (req, res) => {
   const botId = gid(10);
   const bot = { id: botId, code, name, emoji: String(req.body.emoji || '🤖'), desc: String(req.body.desc || ''), coreApp: !!req.body.coreApp };
   s.bots.push(bot);
+  let botChannelId = null;
   if (req.body.channelName) {
     const cid = `bot-ch-${botId}`;
+    botChannelId = cid;
     s.channels[cid] = { id: cid, name: String(req.body.channelName), type: 'text', readonly: true, coreApp: !!req.body.coreApp, botId, messages: [] };
-    if (Array.isArray(s.sections) && s.sections.length) {
-      const sec = s.sections[0];
-      sec.channels = sec.channels || [];
-      sec.channels.push({ id: cid, name: s.channels[cid].name, type: 'текст' });
+    s.sections = Array.isArray(s.sections) ? s.sections : [];
+    let sec = null;
+    if (typeof req.body.sectionName === 'string' && req.body.sectionName.trim()) {
+      const secName = req.body.sectionName.trim().toUpperCase();
+      sec = s.sections.find((x) => String(x.name || '').toUpperCase() === secName);
+      if (!sec) {
+        sec = { name: secName, channels: [] };
+        s.sections.push(sec);
+      }
     }
+    if (!sec) {
+      sec = { name: 'БОТЫ', channels: [] };
+      s.sections.push(sec);
+    }
+    sec.channels = Array.isArray(sec.channels) ? sec.channels : [];
+    sec.channels.push({ id: cid, name: s.channels[cid].name, type: 'текст' });
+    pushSystemMessage(s, code === '111111'
+      ? '👋 Канал приветствия готов. Здесь бот будет отправлять системные приветствия.'
+      : `🤖 Бот ${name} активирован.`, { channelId: cid, authorId: `bot-${botId}` });
   }
+  const activity = pushSystemMessage(s, `🤖 Добавлен бот ${name}`);
   save();
   io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  if (activity) io.to(`server:${s.id}`).emit('message:new', { serverId: s.id, channelId: activity.channelId, msg: activity.msg });
+  io.to(`server:${s.id}`).emit('server:activity', { type: 'bot:added', name, channelId: botChannelId });
   res.json({ server: serializeServer(s), bot });
 });
 
@@ -538,23 +615,15 @@ app.post('/api/invites/:code/join', auth, (req, res) => {
   if (!s.members.includes(req.user.id)) s.members.push(req.user.id);
   req.user.servers = req.user.servers || [];
   if (!req.user.servers.includes(s.id)) req.user.servers.push(s.id);
+  let welcomeEvent = null;
   const welcomeBot = (s.bots || []).find((b) => b.code === '111111');
   if (welcomeBot) {
     const wch = Object.values(s.channels || {}).find((ch) => ch.botId === welcomeBot.id);
-    if (wch) {
-      wch.messages = wch.messages || [];
-      wch.messages.push({
-        id: gid(12),
-        authorId: `bot-${welcomeBot.id}`,
-        ts: now(),
-        ciphertext: `👋 ${req.user.name} присоединился к серверу`,
-        reactions: {},
-        pinned: false,
-      });
-    }
+    if (wch) welcomeEvent = pushSystemMessage(s, `👋 ${req.user.name} присоединился к серверу`, { channelId: wch.id, authorId: `bot-${welcomeBot.id}` });
   }
   save();
   io.to(`server:${s.id}`).emit('server:update', serializeServer(s));
+  if (welcomeEvent) io.to(`server:${s.id}`).emit('message:new', { serverId: s.id, channelId: welcomeEvent.channelId, msg: welcomeEvent.msg });
   res.json({ serverId: s.id });
 });
 
@@ -584,7 +653,8 @@ app.post('/api/admin/ban/server/:id', adminAuth, (req, res) => {
     });
   });
   save();
-  io.emit('ban:update');
+  io.emit('ban:update', { serverId: srv.id, status: 'banned', reason });
+  io.to(`server:${srv.id}`).emit('ban:update', { serverId: srv.id, status: 'banned', reason });
   res.json({ ok: true });
 });
 
@@ -599,7 +669,8 @@ app.post('/api/admin/unban/server/:id', adminAuth, (req, res) => {
     if (b && b.serverId === srv.id) delete db.bans.byIp[ip];
   });
   save();
-  io.emit('ban:update');
+  io.emit('ban:update', { serverId: srv.id, status: 'active', reason: '' });
+  io.to(`server:${srv.id}`).emit('ban:update', { serverId: srv.id, status: 'active', reason: '' });
   io.to(`server:${srv.id}`).emit('server:update', serializeServer(srv));
   res.json({ ok: true });
 });
@@ -632,6 +703,7 @@ app.post('/api/admin/servers', adminAuth, (req, res) => {
     channels,
     members: [],
     memberPerms: {},
+    prefixes: {},
     bots: [],
     createdAt: now(),
     status: 'active',
@@ -681,6 +753,46 @@ io.on('connection', (socket) => {
     socket.emit('server:init', serializeServer(s));
   });
 
+
+  socket.on('voice:join', ({ serverId, channelId }) => {
+    const s = db.servers[serverId];
+    if (!s || !s.members.includes(socket.user.id)) return;
+    const ch = s.channels?.[channelId];
+    if (!ch || ch.type !== 'voice') return;
+    const key = `${serverId}:${channelId}`;
+    voiceState[key] = voiceState[key] || {};
+    voiceState[key][socket.user.id] = voiceState[key][socket.user.id] || { mute: false, deaf: false };
+    socket.join(`voice:${key}`);
+    io.to(`voice:${key}`).emit('voice:presence', {
+      serverId,
+      channelId,
+      participants: Object.entries(voiceState[key]).map(([userId, st]) => ({ userId, mute: !!st.mute, deaf: !!st.deaf })),
+    });
+  });
+
+  socket.on('voice:state', ({ serverId, channelId, mute, deaf }) => {
+    const key = `${serverId}:${channelId}`;
+    if (!voiceState[key] || !voiceState[key][socket.user.id]) return;
+    voiceState[key][socket.user.id] = { mute: !!mute, deaf: !!deaf };
+    io.to(`voice:${key}`).emit('voice:presence', {
+      serverId,
+      channelId,
+      participants: Object.entries(voiceState[key]).map(([userId, st]) => ({ userId, mute: !!st.mute, deaf: !!st.deaf })),
+    });
+  });
+
+  socket.on('voice:leave', ({ serverId, channelId }) => {
+    const key = `${serverId}:${channelId}`;
+    if (!voiceState[key]) return;
+    delete voiceState[key][socket.user.id];
+    socket.leave(`voice:${key}`);
+    io.to(`voice:${key}`).emit('voice:presence', {
+      serverId,
+      channelId,
+      participants: Object.entries(voiceState[key]).map(([userId, st]) => ({ userId, mute: !!st.mute, deaf: !!st.deaf })),
+    });
+  });
+
   socket.on('message:send', ({ serverId, channelId, ciphertext, iv, keyId }) => {
     const s = db.servers[serverId];
     if (!s || !s.members.includes(socket.user.id)) return;
@@ -701,6 +813,19 @@ io.on('connection', (socket) => {
     if (!m.reactions[emoji].includes(socket.user.id)) m.reactions[emoji].push(socket.user.id);
     save();
     io.to(`server:${serverId}`).emit('reaction:update', { serverId, channelId, messageId, reactions: m.reactions });
+  });
+
+  socket.on('disconnect', () => {
+    Object.entries(voiceState).forEach(([key, users]) => {
+      if (!users[socket.user.id]) return;
+      delete users[socket.user.id];
+      const [serverId, channelId] = key.split(':');
+      io.to(`voice:${key}`).emit('voice:presence', {
+        serverId,
+        channelId,
+        participants: Object.entries(users).map(([userId, st]) => ({ userId, mute: !!st.mute, deaf: !!st.deaf })),
+      });
+    });
   });
 });
 
