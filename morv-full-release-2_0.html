@@ -85,6 +85,16 @@ html, body {
 }
 .land-sheet p { font-size: 13px; color: var(--t2); line-height: 1.6; margin-bottom: 22px; }
 
+
+#banScreen{position:fixed;inset:0;z-index:10000;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;}
+#banScreen.on{display:flex;}
+.ban-wrap{max-width:420px;width:100%;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;}
+.ban-emoji{font-size:54px;line-height:1;}
+.ban-title{font-size:20px;font-weight:800;color:var(--t);}
+.ban-reason{font-size:14px;line-height:1.55;color:var(--t2);}
+#inviteNotFound{position:fixed;inset:0;z-index:9999;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;}
+#inviteNotFound.on{display:flex;}
+
 .btn-main {
   width: 100%; height: 52px;
   background: var(--a); border: none; border-radius: 14px;
@@ -1054,6 +1064,22 @@ html, body {
   </div>
 </div>
 
+<div id="banScreen">
+  <div class="ban-wrap">
+    <div class="ban-emoji">❌</div>
+    <div class="ban-title">Доступ к Morv был ограничен</div>
+    <div class="ban-reason" id="banReason">Обратитесь к администратору.</div>
+  </div>
+</div>
+<div id="inviteNotFound">
+  <div class="ban-wrap">
+    <div class="ban-emoji">😞</div>
+    <div class="ban-title">Сервер не найден</div>
+    <div class="ban-reason">Возможно, сервер был удалён или ссылка недействительна.</div>
+    <button class="btn-main" style="max-width:220px;" onclick="goHomeFromInviteNotFound()">На главную</button>
+  </div>
+</div>
+
 <!-- ══ APP ══ -->
 <div id="app">
 
@@ -1658,7 +1684,7 @@ html, body {
     <h3>QR-код приглашения</h3>
     <p>Отсканируйте чтобы присоединиться</p>
     <div style="display:flex;justify-content:center;padding:8px 0 16px;">
-      <canvas id="qrCanvas" width="200" height="200" style="border-radius:12px;"></canvas>
+      <canvas id="qrCanvas" width="160" height="160" style="border-radius:12px;"></canvas>
     </div>
     <div style="text-align:center;font-size:11px;color:var(--t3);margin-bottom:8px;" id="qrLink"></div>
     <div class="s-row">
@@ -1701,9 +1727,10 @@ html, body {
     </div>
   </div>
 </div>
-    <div class="privacy-badge-sub">Скриншот заблокирован.<br>Содержимое защищено.</div>
+<div class="privacy-badge-sub"></div>
   </div>
 </div>
+<script src="/socket.io/socket.io.js"></script>
 <script>
 // ── State ──
 const EMOJIS = ['🦊','🐺','🦝','🦉','🐸','🦋','🐙','🦑','🐉','🦄','🐬','🦜','🐻‍❄️','🦈'];
@@ -1730,7 +1757,10 @@ let $ = {
   autoDelMs:0,
   settingsSec:null,
   prefixes:{},
+  isAdmin:false,
+  perms:{},
 };
+let _sock=null;
 
 // ── Utils ──
 const gid=(n=8)=>[...Array(n)].map(()=>'abcdefghijklmnopqrstuvwxyz0123456789'[Math.random()*36|0]).join('');
@@ -1794,6 +1824,111 @@ function toast(m){
 }
 const openSh=id=>document.getElementById(id).classList.add('on');
 const closeSh=id=>document.getElementById(id).classList.remove('on');
+let _banLockOn=false;
+let _banReason='';
+function _renderBanScreen(){
+  const reasonEl=document.getElementById('banReason');
+  if(reasonEl) reasonEl.textContent=_banReason||'Обратитесь к администратору.';
+  document.getElementById('landing').style.display='none';
+  document.getElementById('app').classList.remove('on');
+  document.getElementById('banScreen').classList.add('on');
+}
+function _hideBanScreen(){
+  const b=document.getElementById('banScreen');
+  if(b) b.classList.remove('on');
+}
+function _enforceBanRoute(){
+  if(!_banLockOn) return;
+  const p=location.pathname||'';
+  if(p==='/admmrv') return;
+  if(p!=='/ban') history.replaceState({},'','/ban');
+}
+function showBlocked(reason=''){
+  _banReason=reason||_banReason||'Обратитесь к администратору.';
+  _banLockOn=true;
+  localStorage.setItem('morv_ban_lock','1');
+  localStorage.setItem('morv_ban_reason',_banReason);
+  _renderBanScreen();
+  _enforceBanRoute();
+}
+function showInviteNotFound(){
+  document.getElementById('landing').style.display='none';
+  document.getElementById('app').classList.remove('on');
+  document.getElementById('inviteNotFound').classList.add('on');
+}
+function hideInviteNotFound(){
+  const n=document.getElementById('inviteNotFound');
+  if(n) n.classList.remove('on');
+}
+function goHomeFromInviteNotFound(){
+  hideInviteNotFound();
+  history.replaceState({},'', '/login');
+  document.getElementById('landing').style.display='flex';
+}
+function canManage(perm){
+  return !!($.isAdmin||($.perms&&$.perms[perm]));
+}
+
+const API={
+  token: localStorage.getItem('morv_token')||'',
+  deviceCode: localStorage.getItem('morv_device_code')||gid(24),
+};
+localStorage.setItem('morv_device_code',API.deviceCode);
+
+async function apiReq(path, opts={}){
+  const doFetch=async()=>{
+    const headers=Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+    if(opts.auth&&API.token) headers.Authorization='Bearer '+API.token;
+    const res=await fetch(path,{method:opts.method||'GET',headers,body:opts.body?JSON.stringify(opts.body):undefined});
+    let data={};
+    try{data=await res.json();}catch(e){}
+    return {res,data};
+  };
+
+  let out=await doFetch();
+  if(opts.auth && out.res.status===401 && !opts._retried){
+    API.token='';
+  _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
+    localStorage.removeItem('morv_token');
+    await ensureSession(true);
+    out=await apiReq(path,Object.assign({},opts,{_retried:true}));
+    return out;
+  }
+
+  if(!out.res.ok){
+    if(out.res.status===403 && (out.data.error==='banned'||out.data.error==='removed')){
+      showBlocked(out.data.reason||'');
+    }
+    const err=new Error(out.data.error||('HTTP '+out.res.status));
+    err.status=out.res.status; err.data=out.data;
+    throw err;
+  }
+  return out.data;
+}
+
+async function ensureSession(force=false){
+  if(API.token && !force) return API.token;
+  const data=await apiReq('/api/auth/device',{method:'POST',body:{deviceCode:API.deviceCode}});
+  API.token=data.token||'';
+  if(API.token) localStorage.setItem('morv_token',API.token);
+  if(data.user&&data.user.name){
+    $.me={id:data.user.id,name:data.user.name,emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
+  }
+  return API.token;
+}
+
+async function getMyServerById(serverId){
+  await ensureSession();
+  const data=await apiReq('/api/servers',{auth:true});
+  return (data.servers||[]).find(s=>s.id===serverId)||null;
+}
+
+function routeToServer(serverId){
+  const u='/servers/'+serverId;
+  if(location.pathname!==u) history.replaceState({},'',u);
+}
 
 // ── Boot ──
 function createServer(){
@@ -1816,17 +1951,40 @@ function previewSrvAva(inp){
   };
   reader.readAsDataURL(file);
 }
-function doCreateServer(){
+async function doCreateServer(){
   const nm=document.getElementById('createSrvName').value.trim();
   const name=nm||('phantom-'+gid(4));
-  closeSh('sh-create');
-  bootWithAva(gid(8),name,window._srvAvaData||null);
+  try{
+    await ensureSession();
+    const data=await apiReq('/api/servers',{method:'POST',auth:true,body:{name,avatar:window._srvAvaData||null}});
+    closeSh('sh-create');
+    bootWithAva(data.server.id,data.server.name,window._srvAvaData||null,data.server);
+  }catch(e){
+    if(e.status===401||e.status===403) toast('Ошибка авторизации. Войдите снова');
+    else toast('Ошибка создания сервера');
+  }
 }
-function joinServer(){
+async function joinServer(){
   const v=document.getElementById('joinInput').value.trim();
   if(!v){document.getElementById('joinInput').focus();return;}
-  const m=v.match(/([a-z0-9]{8})$/);
-  boot(m?m[1]:gid(8),'phantom-'+gid(4));
+  try{
+    await ensureSession();
+    const inv=(v.match(/invite\/([a-z0-9]{10})/i)||v.match(/([a-z0-9]{10})$/i));
+    if(inv){
+      const j=await apiReq('/api/invites/'+inv[1]+'/join',{method:'POST',auth:true});
+      const srv=await getMyServerById(j.serverId);
+      if(!srv){ toast('Сервер не найден'); return; }
+      boot(srv.id,srv.name,srv); return;
+    }
+    const sid=(v.match(/servers\/(srv_[a-z0-9]{8}|[a-z0-9]{8})/i)||v.match(/(srv_[a-z0-9]{8}|[a-z0-9]{8})$/i));
+    if(!sid){ toast('Неверная ссылка'); return; }
+    const srv=await getMyServerById(sid[1]);
+    if(!srv){ toast('Сервер не найден'); return; }
+    boot(srv.id,srv.name,srv);
+  }catch(e){
+    if(e.status===404) toast('Сервер не найден');
+    else toast('Ошибка входа');
+  }
 }
 
 function openEditSrv(){
@@ -1869,44 +2027,90 @@ function doEditSrv(){
   const nm=document.getElementById('editsrvName').value.trim();
   if(!nm){document.getElementById('editsrvName').focus();return;}
   const imgEl=document.getElementById('editsrvAvaImg');
-  $.snm=nm;
-  $.srvAva=imgEl.style.display!=='none'&&imgEl.src?imgEl.src:null;
-  const avaEl=document.getElementById('srvAva');
-  if($.srvAva){
-    avaEl.innerHTML=`<img src="${$.srvAva}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">`;
-  } else {
-    avaEl.textContent=nm[0].toUpperCase(); avaEl.innerHTML='';
-    avaEl.textContent=nm[0].toUpperCase();
-  }
-  document.getElementById('srvNm').textContent=nm;
-  closeSh('sh-editsrv');
-  toast('Сервер обновлён');
+  const avatar=imgEl.style.display!=='none'&&imgEl.src?imgEl.src:null;
+  apiReq('/api/servers/'+$.sid+'/update',{method:'POST',auth:true,body:{name:nm,avatar}})
+    .then((out)=>{
+      if(out&&out.server){
+        applyServerData(out.server,true);
+        renderChs();
+      }
+      closeSh('sh-editsrv');
+      toast('Сервер обновлён');
+    }).catch(()=>toast('Ошибка обновления сервера'));
 }
 
-function bootWithAva(sid,snm,avaData){
+
+function applyServerData(srv, preserveBots){
+  const keepCh = preserveBots ? Object.values($.chs).filter(ch=>ch.botId||ch.coreApp) : [];
+  const keepCatIds = new Set(keepCh.map(ch=>ch.cat));
+  const keepCats = preserveBots ? $.cats.filter(c=>keepCatIds.has(c.id)||c.botId||c.isBotCat) : [];
+  const keepMsgs = {};
+  keepCh.forEach(ch=>{ keepMsgs[ch.id]=($.msgs[ch.id]||[]); });
+
+  $.cats=[]; $.chs={};
+  const sections=(srv.sections||[]);
+  sections.forEach((sec,idx)=>$.cats.push({id:'sec'+idx,name:sec.name||('РАЗДЕЛ '+(idx+1)),serverSecIndex:idx}));
+  $.msgs={}; $.unread={}; $.pinned={};
+  const catByChannel={};
+  sections.forEach((sec,idx)=>{
+    (sec.channels||[]).forEach(ch=>{ if(ch&&ch.id) catByChannel[ch.id]='sec'+idx; });
+  });
+  Object.values(srv.channels||{}).forEach((ch,idx)=>{
+    const catId=catByChannel[ch.id]||($.cats[0]&&$.cats[0].id)||'';
+    $.chs[ch.id]={id:ch.id,name:ch.name||('channel-'+(idx+1)),type:ch.type==='voice'?'voice':'text',cat:catId,desc:'',coreApp:!!ch.coreApp,readonly:!!ch.readonly};
+    $.msgs[ch.id]=(ch.messages||[]).map(m=>({id:m.id,aid:m.authorId,author:(srv.memberProfiles||[]).find(p=>p.id===m.authorId)?.name||((m.authorId===$.me.id)?'Вы':'user-'+String(m.authorId||'').slice(0,6)),text:m.ciphertext||'',ts:m.ts||Date.now(),reactions:m.reactions||{},replyTo:m.replyTo||null,pinned:!!m.pinned}));
+    $.unread[ch.id]=0; $.pinned[ch.id]=[];
+    (ch.messages||[]).forEach(m=>{ if(m.pinned) $.pinned[ch.id].push(m.id); });
+  });
+
+  keepCats.forEach(c=>{ if(!$.cats.find(x=>x.id===c.id)) $.cats.push(c); });
+  keepCh.forEach(ch=>{
+    if(!$.chs[ch.id]){
+      $.chs[ch.id]=ch;
+      $.msgs[ch.id]=keepMsgs[ch.id]||[];
+      $.unread[ch.id]=$.unread[ch.id]||0;
+      $.pinned[ch.id]=$.pinned[ch.id]||[];
+    }
+  });
+
+  const ids=Array.isArray(srv.members)?srv.members:[];
+  const meId=$.me&&$.me.id?$.me.id:'';
+  const mem=[];
+  if($.me) mem.push($.me);
+  ids.filter(id=>id&&id!==meId).forEach((id,idx)=>{
+    const prof=(srv.memberProfiles||[]).find(p=>p.id===id);
+    mem.push({id,name:(prof&&prof.name)||('user-'+String(id).slice(0,6)),emoji:EMOJIS[idx%EMOJIS.length],you:false});
+  });
+  $.members=mem;
+  $.isAdmin = !!($.me&&srv&&srv.ownerId&&($.me.id===srv.ownerId||$.me.id==='admin'));
+  $.ownerId=srv.ownerId||'';
+  $.perms=$.isAdmin?{manageChannels:true,manageServer:true,manageMembers:true,manageMessages:true,manageBots:true}:((srv.memberPerms&&$.me&&srv.memberPerms[$.me.id])||{});
+  $.permsMap=srv.memberPerms||{};
+  $.bots=Array.isArray(srv.bots)?srv.bots:[];
+  if('avatar' in srv) $.srvAva=srv.avatar||null;
+}
+
+function bootWithAva(sid,snm,avaData,serverData){
   $.srvAva=avaData||null;
-  boot(sid,snm);
+  boot(sid,snm,serverData);
 }
 
-function boot(sid,snm){
+function boot(sid,snm,serverData=null){
   $.sid=sid; $.snm=snm;
-  $.me={id:gid(12),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
-  const [c1,c2,c3,c4]=[gid(),gid(),gid(),gid()];
-  $.cats=[{id:'g1',name:'ОБЩИЕ'},{id:'g2',name:'ГОЛОСОВЫЕ'}];
-  $.chs={
-    [c1]:{id:c1,name:'общий',type:'text',cat:'g1',desc:'Основной чат'},
-    [c2]:{id:c2,name:'оффтоп',type:'text',cat:'g1',desc:'Разговоры'},
-    [c3]:{id:c3,name:'лаунж',type:'voice',cat:'g2',desc:''},
-    [c4]:{id:c4,name:'работа',type:'voice',cat:'g2',desc:''},
-  };
-  $.msgs={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
-  $.unread={[c1]:0,[c2]:0,[c3]:0,[c4]:0};
-  $.pinned={[c1]:[],[c2]:[],[c3]:[],[c4]:[]};
-  $.members=[$.me,...Array.from({length:2+~~(Math.random()*4)},()=>({
-    id:gid(),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:false
-  }))];
-  sysMsg(c1,'👻 Пространство создано. Поделитесь ссылкой.');
-  sysMsg(c1,'🔒 Сквозное шифрование. Без данных.');
+  if(!$.me||!$.me.id) $.me={id:gid(12),name:rn(),emoji:EMOJIS[~~(Math.random()*EMOJIS.length)],you:true};
+  const srv=serverData||{id:sid,name:snm,sections:[],channels:{},members:[$.me?$.me.id:''],ownerId:''};
+  applyServerData(srv,false);
+
+  localStorage.setItem('morv_last_server',sid);
+  routeToServer(sid);
+  _inviteUrl='';
+  hideInviteNotFound();
+  _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
+  _hideBanScreen();
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
 
   const avaEl=document.getElementById('srvAva');
   if($.srvAva){
@@ -1916,7 +2120,7 @@ function boot(sid,snm){
   }
   document.getElementById('srvNm').textContent=snm;
   document.getElementById('srvId').textContent='ID: '+sid;
-  document.getElementById('invBox').textContent='phantom.app/s/'+sid;
+  document.getElementById('invBox').textContent=location.origin+'/servers/'+sid;
 
   renderChs();
   document.getElementById('landing').style.display='none';
@@ -1931,11 +2135,56 @@ function boot(sid,snm){
     document.getElementById('sidebarName').textContent=$.me.name;
   }
 
-  if(window.innerWidth>=700) switchCh(c1);
+  const firstText=Object.values($.chs).find(ch=>ch.type==='text');
+  if(firstText&&window.innerWidth>=700) switchCh(firstText.id);
   else setView('ch');
+  startStatePoll();
+  connectRealtime();
 
-  sim();
 }
+
+let _statePoll=null;
+async function pollServerState(){
+  if(!_banLockOn && !$.sid) return;
+  if(_banLockOn){
+    try{
+      await ensureSession();
+      const sid=localStorage.getItem('morv_last_server');
+      if(sid){
+        const srv=await getMyServerById(sid);
+        if(srv){
+          _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
+          localStorage.removeItem('morv_ban_lock');
+          localStorage.removeItem('morv_ban_reason');
+          boot(srv.id,srv.name,srv);
+          return;
+        }
+      }
+    }catch(e){ if(_banLockOn) showBlocked(_banReason); else document.getElementById('landing').style.display='flex'; }
+    return;
+  }
+  try{
+    const st=await apiReq('/api/servers/'+$.sid+'/state',{auth:true});
+    if(st&&st.server){
+      if((st.server.name||'')!==$.snm){ $.snm=st.server.name||$.snm; document.getElementById('srvNm').textContent=$.snm; }
+      applyServerData(st.server,true);
+      renderChs();
+    }
+  }catch(e){
+    if(e.status===404){
+      toast('Сервер был удалён');
+      localStorage.removeItem('morv_last_server');
+      document.getElementById('app').classList.remove('on');
+      document.getElementById('landing').style.display='flex';
+      history.replaceState({},'','/login');
+    } else if(e.status===403){
+      showBlocked(e.data&&e.data.reason?e.data.reason:'');
+    }
+  }
+}
+function startStatePoll(){ clearInterval(_statePoll); _statePoll=setInterval(pollServerState,1000); }
 
 function sysMsg(cid,txt){
   $.msgs[cid].push({id:gid(),sys:true,txt,ts:Date.now()});
@@ -1945,6 +2194,13 @@ function sysMsg(cid,txt){
 function renderChs(){
   const box=document.getElementById('chList');
   box.innerHTML='';
+  if(!$.cats.length){
+    const empty=document.createElement('div');
+    empty.style.cssText='display:flex;align-items:center;justify-content:center;min-height:40vh;color:var(--t3);font-size:14px;text-align:center;padding:16px;';
+    empty.textContent='Создайте раздел и начните общение!';
+    box.appendChild(empty);
+    return;
+  }
   $.cats.forEach(cat=>{
     const sec=document.createElement('div');
     sec.className='cat-sec';
@@ -1954,6 +2210,7 @@ function renderChs(){
     const p=document.createElement('button');
     p.className='cat-plus';p.textContent='+';p.title=cat.botId?'Добавить бота':'Добавить канал';
     p.onclick=e=>{e.stopPropagation();cat.botId?openAddBot():showChSh(cat.id);};
+    p.style.display=(cat.botId?canManage('manageBots'):canManage('manageChannels'))?'flex':'none';
     h.appendChild(p);
     addLongPress(h, e=>showCtxCat(cat.id, e));
     sec.appendChild(h);
@@ -2014,8 +2271,8 @@ function switchCh(cid){
     initScrollBtn();
     const ro=ch.readonly===true;
     const ca=ch.coreApp===true;
-    document.getElementById('readonlyBar').style.display=(ro&&!ca)?'flex':'none';
-    document.getElementById('coreAppBar').style.display=ca?'flex':'none';
+    document.getElementById('readonlyBar').style.display=((ro&&!ca)||(ca&&!$.isAdmin))?'flex':'none';
+    document.getElementById('coreAppBar').style.display=(ca&&$.isAdmin)?'flex':'none';
     document.getElementById('chatInp').style.display=(ro||ca)?'none':'';
     document.getElementById('sndBtn').style.display=(ro||ca)?'none':'';
   }
@@ -2210,9 +2467,12 @@ function renderMsgs(){
       }
       if(m.replyTo){
         const rq=document.createElement('div'); rq.className='reply-quote';
-        const rqText=m.replyTo.text.replace(/\{\{[^}]+\}\}/g,'🔒 зашифровано');
-        rq.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span><strong style="color:var(--a2)">${esc(m.replyTo.author)}</strong>: ${esc(rqText.slice(0,60))}${rqText.length>60?'…':''}</span>`;
-        rq.onclick=e=>{e.stopPropagation();const el=box.querySelector(`[data-mid="${m.replyTo.id}"]`);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.background='rgba(43,209,255,.12)';setTimeout(()=>el.style.background='',800);}};
+        const linked=box.querySelector(`[data-mid="${m.replyTo.id}"]`);
+        const deleted=!!(m.replyTo.deleted||!linked);
+        const baseText=deleted?'Сообщение удалено':String(m.replyTo.text||'');
+        const rqText=baseText.replace(/\{\{[^}]+\}\}/g,'🔒 зашифровано');
+        rq.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span><strong style="color:var(--a2)">${esc(m.replyTo.author||'пользователь')}</strong>: ${esc(rqText.slice(0,60))}${rqText.length>60?'…':''}</span>`;
+        rq.onclick=e=>{e.stopPropagation();const el=box.querySelector(`[data-mid="${m.replyTo.id}"]`);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.background='rgba(43,209,255,.12)';setTimeout(()=>el.style.background='',800);} else { toast('Сообщение больше не существует'); }};
         rq.addEventListener('touchstart',e=>e.stopPropagation(),{passive:true});
         g.appendChild(rq);
       }
@@ -2327,12 +2587,11 @@ function showPinsList(){
   openSh('sh-pins');
 }
 
-function send(){
+async function send(){
   const inp=document.getElementById('chatInp');
   const txt=inp.value.trim(); if(!txt||!$.cur)return;
   const ch=$.chs[$.cur]; if(!ch||ch.type!=='text')return;
   const cid=$.cur;
-  // Slow mode check
   if(!$.editMsgId&&!$.editSchedId&&window._ccSlowMode>0){
     const now=Date.now();
     const last=window._ccLastSent||0;
@@ -2341,11 +2600,12 @@ function send(){
   }
 
   if($.editMsgId){
-    const msg=($.msgs[cid]||[]).find(m=>m.id===$.editMsgId);
-    if(msg){msg.text=txt; msg.edited=true;}
-    cancelEdit();
-    renderMsgs(); scrollDn();
-    return;
+    try{
+      await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages/'+$.editMsgId+'/update',{method:'POST',auth:true,body:{text:txt}});
+      cancelEdit();
+      inp.value=''; inp.style.height='';
+      return;
+    }catch(e){ toast('Ошибка редактирования'); return; }
   }
 
   if($.editSchedId){
@@ -2370,27 +2630,19 @@ function send(){
       finalTxt=finalTxt.slice(0,seg.start)+before+finalTxt.slice(seg.start,seg.end)+after+finalTxt.slice(seg.end);
     });
   }
-  const msg={id:gid(),aid:$.me.id,author:$.me.name,text:finalTxt,ts:Date.now(),reactions:{}};
-  if($.replyTo){msg.replyTo=$.replyTo; clearReply();}
-  $.msgs[cid].push(msg);
-  if(window._ccSlowMode>0) { window._ccLastSent=Date.now(); _ccStartSlowTimer(); }
-  $.fmtSegments=[]; $.activeFmt=null; $.fmtStart=null;
-  if($.autoDelMs>0){
-    setTimeout(()=>{
-      $.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.id!==msg.id);
-      if($.cur===cid) renderMsgs();
-    }, $.autoDelMs);
-  }
-  inp.value=''; inp.style.height=''; renderMsgs(); scrollDn();
-  const oth=$.members.filter(m=>!m.you);
-  if(oth.length&&Math.random()>.35&&!(ch&&ch.readonly)){
-    const r=oth[~~(Math.random()*oth.length)];
-    const rp=['ок','понял 👍','+','хм','интересно','согласен','...','🤔','ясно','точно'];
-    setTimeout(()=>{
-      if($.cur!==cid)return;
-      $.msgs[cid].push({id:gid(),aid:r.id,author:r.name,text:rp[~~(Math.random()*rp.length)],ts:Date.now(),reactions:{}});
-      if($.cur===cid){renderMsgs();scrollDnIfAtBottom();}
-    },900+Math.random()*2500);
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages',{method:'POST',auth:true,body:{text:finalTxt,replyTo:$.replyTo||null}});
+    const m=out&&out.msg?out.msg:null;
+    if(m){
+      if(window._ccSlowMode>0) { window._ccLastSent=Date.now(); _ccStartSlowTimer(); }
+    }
+    $.fmtSegments=[]; $.activeFmt=null; $.fmtStart=null;
+    if($.replyTo) clearReply();
+    inp.value=''; inp.style.height=''; renderMsgs(); scrollDn();
+  }catch(e){
+    if(e.status===404) toast('Канал не найден на сервере');
+    else if(e.status===403) toast('Нет доступа к отправке');
+    else toast('Ошибка отправки');
   }
 }
 function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
@@ -2416,15 +2668,14 @@ function doReply(){
 }
 
 // ── Reactions ──
-function toggleRxn(mid,emoji){
+async function toggleRxn(mid,emoji){
   const cid=$.cur;
   const msg=($.msgs[cid]||[]).find(m=>m.id===mid); if(!msg)return;
-  if(!msg.reactions) msg.reactions={};
-  if(!msg.reactions[emoji]) msg.reactions[emoji]=[];
-  const idx=msg.reactions[emoji].indexOf($.me.id);
-  if(idx>=0) msg.reactions[emoji].splice(idx,1);
-  else msg.reactions[emoji].push($.me.id);
-  renderMsgs();
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/reactions',{method:'POST',auth:true,body:{messageId:mid,emoji}});
+    msg.reactions=(out&&out.reactions)?out.reactions:(msg.reactions||{});
+    renderMsgs();
+  }catch(e){ toast('Ошибка реакции'); }
 }
 
 function showMsgCtx(mid, e){
@@ -2458,16 +2709,68 @@ function pickRxn(emoji){
 // ── Pin ──
 function togglePin(mid){
   const cid=$.cur;
-  if(!$.pinned[cid]) $.pinned[cid]=[];
-  const idx=$.pinned[cid].indexOf(mid);
-  if(idx>=0){
-    $.pinned[cid].splice(idx,1);
-    toast('Сообщение откреплено');
-  } else {
-    $.pinned[cid].push(mid);
-    toast('Сообщение закреплено');
-  }
-  updatePinnedBanner(cid);
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/pin',{method:'POST',auth:true,body:{messageId:mid}})
+    .then(out=>{ toast(out&&out.pinned?'Сообщение закреплено':'Сообщение откреплено'); })
+    .catch(()=>toast('Ошибка закрепления'));
+}
+
+function connectRealtime(){
+  if(!window.io||!API.token||!$.sid) return;
+  if(_sock){ try{ _sock.disconnect(); }catch(e){} _sock=null; }
+  _sock=io({auth:{token:API.token}});
+  _sock.on('connect',()=>{ _sock.emit('server:join',{serverId:$.sid}); });
+  _sock.on('server:update',(srv)=>{
+    if(srv&&srv.id===$.sid){
+      applyServerData(srv,true);
+      document.getElementById('srvNm').textContent=srv.name||$.snm;
+      const avaEl=document.getElementById('srvAva');
+      if($.srvAva){ avaEl.innerHTML=`<img src="${$.srvAva}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">`; }
+      else { avaEl.innerHTML=''; avaEl.textContent=(srv.name||'S')[0].toUpperCase(); }
+      renderChs();
+      if($.cur) renderMsgs();
+    }
+  });
+  _sock.on('server:deleted',({serverId})=>{
+    if(serverId!==$.sid) return;
+    localStorage.removeItem('morv_last_server');
+    document.getElementById('app').classList.remove('on');
+    document.getElementById('landing').style.display='flex';
+    history.replaceState({},'','/login');
+  });
+  _sock.on('message:new',({serverId,channelId,msg})=>{
+    if(serverId!==$.sid||!msg) return;
+    $.msgs[channelId]=$.msgs[channelId]||[];
+    if($.msgs[channelId].some(x=>x.id===msg.id)) return;
+    const author=($.members.find(m=>m.id===msg.authorId)||{}).name||('user-'+String(msg.authorId||'').slice(0,6));
+    $.msgs[channelId].push({id:msg.id,aid:msg.authorId,author,text:msg.ciphertext||'',ts:msg.ts||Date.now(),reactions:msg.reactions||{},replyTo:msg.replyTo||null,pinned:!!msg.pinned});
+    if(msg.pinned){ $.pinned[channelId]=$.pinned[channelId]||[]; if(!$.pinned[channelId].includes(msg.id)) $.pinned[channelId].push(msg.id); }
+    if($.cur===channelId){ renderMsgs(); scrollDnIfAtBottom(); updatePinnedBanner(channelId); }
+  });
+  _sock.on('reaction:update',({serverId,channelId,messageId,reactions})=>{
+    if(serverId!==$.sid) return;
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId);
+    if(msg){ msg.reactions=reactions||{}; if($.cur===channelId) renderMsgs(); }
+  });
+  _sock.on('message:update',({serverId,channelId,messageId,text,edited})=>{
+    if(serverId!==$.sid) return;
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId);
+    if(msg){ msg.text=text||msg.text; msg.edited=!!edited; if($.cur===channelId) renderMsgs(); }
+  });
+  _sock.on('message:delete',({serverId,channelId,messageId})=>{
+    if(serverId!==$.sid) return;
+    $.msgs[channelId]=($.msgs[channelId]||[]).filter(m=>m.id!==messageId);
+    $.pinned[channelId]=($.pinned[channelId]||[]).filter(x=>x!==messageId);
+    if($.cur===channelId){ renderMsgs(); updatePinnedBanner(channelId); }
+  });
+  _sock.on('message:pin',({serverId,channelId,messageId,pinned})=>{
+    if(serverId!==$.sid) return;
+    $.pinned[channelId]=$.pinned[channelId]||[];
+    const idx=$.pinned[channelId].indexOf(messageId);
+    if(pinned&&idx<0) $.pinned[channelId].push(messageId);
+    if(!pinned&&idx>=0) $.pinned[channelId].splice(idx,1);
+    const msg=($.msgs[channelId]||[]).find(m=>m.id===messageId); if(msg) msg.pinned=!!pinned;
+    if($.cur===channelId){ renderMsgs(); updatePinnedBanner(channelId); }
+  });
 }
 
 // ── Edit msg ──
@@ -2541,14 +2844,9 @@ function doSchedule(){
 function deliverScheduled(id){
   const idx=$.scheduled.findIndex(s=>s.id===id); if(idx<0)return;
   const sched=$.scheduled.splice(idx,1)[0];
-  if(!$.msgs[sched.cid]) $.msgs[sched.cid]=[];
-  const msg={id,aid:$.me.id,author:$.me.name,text:sched.text,ts:Date.now(),reactions:{}};
-  if(sched.replyTo) msg.replyTo=sched.replyTo;
-  $.msgs[sched.cid].push(msg);
-  if($.cur===sched.cid){renderMsgs();scrollDnIfAtBottom();}
-  else{$.unread[sched.cid]=($.unread[sched.cid]||0)+1; renderChs();}
-  updateSchedBtn();
-  toast('✉️ Отложенное сообщение отправлено');
+  apiReq('/api/servers/'+$.sid+'/channels/'+sched.cid+'/messages',{method:'POST',auth:true,body:{text:sched.text,replyTo:sched.replyTo||null}})
+    .then(()=>{ updateSchedBtn(); toast('✉️ Отложенное сообщение отправлено'); })
+    .catch(()=>{ toast('Ошибка отправки отложенного'); updateSchedBtn(); });
 }
 
 function updateSchedBtn(){
@@ -2631,9 +2929,8 @@ function doReschedule(){
 // ── Delete msg ──
 function deleteMsg(mid){
   const cid=$.cur;
-  $.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.id!==mid);
-  if($.pinned[cid]){$.pinned[cid]=$.pinned[cid].filter(p=>p!==mid);updatePinnedBanner(cid);}
-  renderMsgs();
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/messages/'+mid+'/delete',{method:'POST',auth:true})
+    .catch(()=>toast('Ошибка удаления'));
 }
 
 // ── Voice ──
@@ -2648,12 +2945,6 @@ function renderVcGrid(){
     g.appendChild(c);
   });
   clearInterval(window._vi);
-  window._vi=setInterval(()=>{
-    show.filter(m=>!m.you).forEach(m=>{
-      const el=document.getElementById('vc-'+m.id);
-      if(el)el.classList.toggle('sp',Math.random()>.55);
-    });
-  },1800);
 }
 
 // ── Sounds ──
@@ -2730,21 +3021,42 @@ function showMembers(){
     i.innerHTML=`<div class="m-ava">${m.emoji}<div class="m-dot"></div></div>
       <div style="flex:1;min-width:0;"><div class="m-nm"><span>${m.you?'вы':m.name}</span></div>${m.you?'<div class="m-you">это вы</div>':''}</div>${prefix?`<span class="m-prefix">${esc(prefix)}</span>`:''}`;
     addLongPress(i, e=>{
-      showCtx([{
+      const actions=[{
         icon:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`,
         label: prefix ? 'Изменить префикс' : 'Задать префикс',
         action:()=>openPrefixSheet(m.id)
-      },
-      ...(prefix?[{
+      }];
+      if(prefix) actions.push({
         icon:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><line x1="9" y1="6" x2="9.01" y2="3"/><line x1="15" y1="6" x2="14.99" y2="3"/></svg>`,
         label:'Удалить префикс',
         action:()=>{delete $.prefixes[m.id];showMembers();renderMsgs();toast('Префикс удалён');}
-      }]:[])
-      ], e.touches?e.touches[0]:e);
+      });
+      if(canManage('manageMembers')&&!m.you&&m.id!==($.ownerId||'')){
+        actions.push({icon:_delSvg,label:'Удалить участника',danger:true,action:()=>removeMember(m.id)});
+        actions.push({icon:_editSvg,label:'Права участника',action:()=>editMemberPerms(m.id)});
+      }
+      showCtx(actions, e.touches?e.touches[0]:e);
     });
     l.appendChild(i);
   });
   openSh('sh-mem');
+}
+
+async function removeMember(memberId){
+  try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/remove',{method:'POST',auth:true}); toast('Участник удалён'); }
+  catch(e){ toast('Ошибка удаления участника'); }
+}
+async function editMemberPerms(memberId){
+  const cur=($.permsMap&&$.permsMap[memberId])||{};
+  const next={
+    manageChannels:confirm('Разрешить управление каналами/разделами?'),
+    manageServer:confirm('Разрешить редактирование сервера?'),
+    manageMembers:confirm('Разрешить управление участниками?'),
+    manageMessages:confirm('Разрешить удалять/редактировать чужие сообщения?'),
+    manageBots:confirm('Разрешить управление ботами?'),
+  };
+  try{ await apiReq('/api/servers/'+$.sid+'/members/'+memberId+'/permissions',{method:'POST',auth:true,body:next}); toast('Права обновлены'); }
+  catch(e){ toast('Ошибка обновления прав'); }
 }
 
 let _prefixMemberId=null;
@@ -2765,47 +3077,40 @@ function savePrefix(){
 }
 
 // ── Invite ──
-function showInvite(){openSh('sh-inv');}
+let _inviteUrl='';
+async function ensureInvite(){
+  if(!_inviteUrl){
+    const r=await apiReq('/api/servers/'+$.sid+'/invite',{auth:true});
+    _inviteUrl=location.origin+(r.url||('/invite/'+(r.invite&&r.invite.code?r.invite.code:'')));
+    document.getElementById('invBox').textContent=_inviteUrl;
+  }
+  return _inviteUrl;
+}
+function showInvite(){
+  ensureInvite().then(()=>openSh('sh-inv')).catch(()=>{toast('Ошибка invite');openSh('sh-inv');});
+}
 function copyInv(){
-  navigator.clipboard.writeText('morv.app/s/'+$.sid).catch(()=>{});
+  ensureInvite().then((u)=>navigator.clipboard.writeText(u).catch(()=>{}));
   toast('Ссылка скопирована!');
 }
 
 // ── QR code ──
 function showQR(){
-  const url='morv.app/s/'+$.sid;
-  document.getElementById('qrLink').textContent=url;
-  drawQR(url);
-  openSh('sh-qr');
+  ensureInvite().then((url)=>{
+    document.getElementById('qrLink').textContent=url;
+    drawQR(url);
+    openSh('sh-qr');
+  }).catch(()=>toast('Ошибка invite'));
 }
 function drawQR(text){
   const canvas=document.getElementById('qrCanvas');
   const ctx=canvas.getContext('2d');
-  const size=200, cell=8, mod=Math.ceil(size/cell);
   const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()||'#0e0e12';
-  ctx.fillStyle=bg; ctx.fillRect(0,0,size,size);
-  let hash=5381;
-  for(let i=0;i<text.length;i++) hash=hash*33+text.charCodeAt(i);
-  hash=Math.abs(hash);
-  const accent=getComputedStyle(document.documentElement).getPropertyValue('--a').trim()||'#2BD1FF';
-  ctx.fillStyle=accent;
-  for(let r=0;r<mod;r++){
-    for(let c=0;c<mod;c++){
-      const inTL=(r<7 ? (c<7?1:0) : 0);
-      const inTR=(r<7 ? (c>=mod-7?1:0) : 0);
-      const inBL=(r>=mod-7 ? (c<7?1:0) : 0);
-      if(inTL||inTR||inBL){
-        const lr=inTL?r:(inTR?r:r-(mod-7));
-        const lc=inTL?c:(inTR?c-(mod-7):c);
-        const isBorder=(lr===0||lr===6||lc===0||lc===6);
-        const isInner=(lr>=2 ? (lr<=4 ? (lc>=2 ? (lc<=4?1:0) : 0) : 0) : 0);
-        if(isBorder||isInner) ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
-        continue;
-      }
-      const seed=Math.abs((hash*r*73+c*19)%1000);
-      if(seed%3===0) ctx.fillRect(c*cell,r*cell,cell-1,cell-1);
-    }
-  }
+  ctx.fillStyle=bg; ctx.fillRect(0,0,canvas.width,canvas.height);
+  const img=new Image();
+  img.onload=()=>{ ctx.drawImage(img,0,0,canvas.width,canvas.height); };
+  img.onerror=()=>{ ctx.fillStyle='#2BD1FF'; ctx.fillRect(16,16,168,168); };
+  img.src='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(text);
 }
 
 // ── Bots ──
@@ -2820,6 +3125,7 @@ const BOT_REGISTRY={
 };
 
 function openAddBot(){
+  if(!canManage('manageBots')){ toast('Недостаточно прав'); return; }
   document.querySelectorAll('.bot-code-cell').forEach(c=>c.value='');
   openSh('sh-addbot');
   setTimeout(()=>document.querySelectorAll('.bot-code-cell')[0].focus(),300);
@@ -2848,62 +3154,26 @@ function _ensureBotCat(){
   return cat;
 }
 
-function addBot(){
+async function addBot(){
   const cells=document.querySelectorAll('.bot-code-cell');
   const code=Array.from(cells).map(c=>c.value).join('');
   if(code.length<6){toast('Введите все 6 цифр');return;}
   const info=BOT_REGISTRY[code];
   if(!info){toast('Неверный код бота');return;}
   if($.bots.find(b=>b.code===code)){toast('Этот бот уже добавлен');return;}
-  const botId=gid();
-  $.bots.push({id:botId,code,...info});
-  closeSh('sh-addbot');
-  showMembers();
-  toast(`Бот ${info.name} добавлен`);
-
-  if(code==='111111'||code==='222222'||code==='857341'){
-    const cat=_ensureBotCat();
-    const chId='bot-ch-'+botId;
-    const isStat=code==='222222';
-    const isCC=code==='857341';
-    $.chs[chId]={id:chId,name:isCC?'control-center':isStat?'статистика':'приветствие',type:'text',cat:cat.id,desc:'',readonly:true,botId,coreApp:(isStat||isCC)?true:false};
-    $.msgs[chId]=[]; $.unread[chId]=0; $.pinned[chId]=[];
-    if(!isStat&&!isCC){
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'приветствие_bot',
-        text:`👋 Привет всем! В этом канале будут появляться уведомления о новых участниках. Например: @участник зашёл на сервер.`,
-        ts:Date.now(),reactions:{}});
-    } else if(isStat){
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'статистика_bot',
-        text:`📈 Привет! Я бот Статистика. Открой приложение чтобы увидеть подробную статистику сервера — количество сообщений, участников, активность по каналам и многое другое.`,
-        ts:Date.now(),reactions:{}});
-    } else {
-      $.msgs[chId].push({id:gid(),aid:'bot-'+botId,author:'control_center_bot',
-        text:`🛡 Control Center активирован. Открой панель управления для администрирования сервера — управление участниками, лог действий, быстрые команды и настройки безопасности.`,
-        ts:Date.now(),reactions:{}});
-    }
-    renderChs();
-  } else if($.cur){
-    $.msgs[$.cur].push({id:gid(),aid:'bot-'+botId,author:info.name,text:`${info.emoji} Привет! Я бот ${info.name}. ${info.desc}.`,ts:Date.now(),reactions:{}});
-    renderMsgs(); scrollDn();
-  }
+  try{
+    const channelName=(code==='857341'?'control-center':(code==='222222'?'статистика':(code==='111111'?'приветствие':'')));
+    await apiReq('/api/servers/'+$.sid+'/bots/add',{method:'POST',auth:true,body:{code,name:info.name,emoji:info.emoji,desc:info.desc,coreApp:!!info.coreApp,channelName}});
+    closeSh('sh-addbot');
+    toast(`Бот ${info.name} добавлен`);
+  }catch(e){ toast(e.status===409?'Этот бот уже добавлен':'Ошибка добавления бота'); }
 }
 
 function removeBot(id){
-  const bot=$.bots.find(b=>b.id===id);
-  if(!bot){return;}
-  const botCh=Object.values($.chs).find(c=>c.botId===id);
-  if(botCh){
-    if($.cur===botCh.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-    delete $.chs[botCh.id]; delete $.msgs[botCh.id]; delete $.pinned[botCh.id];
-  }
-  const cat=$.cats.find(c=>c.isBotCat);
-  if(cat){
-    const remaining=Object.values($.chs).filter(c=>c.cat===cat.id);
-    if(!remaining.length) $.cats=$.cats.filter(c=>!c.isBotCat);
-  }
-  $.bots=$.bots.filter(b=>b.id!==id);
-  showMembers(); renderChs(); renderBotList();
-  if(bot) toast(`Бот ${bot.name} удалён`);
+  if(!canManage('manageBots')){ toast('Недостаточно прав'); return; }
+  apiReq('/api/servers/'+$.sid+'/bots/'+id+'/remove',{method:'POST',auth:true})
+    .then(()=>toast('Бот удалён'))
+    .catch(()=>toast('Ошибка удаления бота'));
 }
 function renderBotList(){
   const list=document.getElementById('botList');
@@ -2932,6 +3202,7 @@ function renderBotList(){
 
 // ── Channel sheet ──
 function showChSh(catId){
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   $.newCat=catId; $.newType='text';
   document.getElementById('tcTxt').classList.add('on');
   document.getElementById('tcVc').classList.remove('on');
@@ -2945,32 +3216,41 @@ function selType(t){
   document.getElementById('tcTxt').classList.toggle('on',t==='text');
   document.getElementById('tcVc').classList.toggle('on',t==='voice');
 }
-function doMakeCh(){
+async function doMakeCh(){
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   const raw=document.getElementById('chNm').value.trim();
   if(!raw){document.getElementById('chNm').focus();return;}
   const nm=raw.toLowerCase().replace(/\s+/g,'-');
   const ds=document.getElementById('chDs').value.trim();
-  const id=gid();
-  $.chs[id]={id,name:nm,type:$.newType,cat:$.newCat,desc:ds};
-  $.msgs[id]=[];
-  $.unread[id]=0;
-  $.pinned[id]=[];
-  if($.newType==='text')sysMsg(id,'✨ Канал создан.');
-  closeSh('sh-ch'); renderChs(); switchCh(id);
-  toast('#'+nm+' создан');
+  const cat=$.cats.find(c=>c.id===$.newCat);
+  const sectionIndex=(cat&&Number.isInteger(cat.serverSecIndex))?cat.serverSecIndex:-1;
+  if(sectionIndex<0){ toast('Раздел не найден'); return; }
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/channels',{method:'POST',auth:true,body:{name:nm,type:$.newType,sectionIndex}});
+    if(out&&out.server) applyServerData(out.server,true);
+    closeSh('sh-ch'); renderChs();
+    const ch=out&&out.channel?out.channel:null;
+    if(ch&&ch.id) switchCh(ch.id);
+    toast('#'+nm+' создан');
+  }catch(e){ toast(e.status===403?'Только администратор может добавлять каналы':'Ошибка создания канала'); }
 }
 
 // ── Category sheet ──
 function showCatSh(){
+  if(!$.isAdmin){ toast('Только администратор может добавлять разделы'); return; }
   document.getElementById('catNm').value='';
   openSh('sh-cat');
   setTimeout(()=>document.getElementById('catNm').focus(),300);
 }
-function doMakeCat(){
+async function doMakeCat(){
+  if(!canManage('manageChannels')){ toast('Недостаточно прав'); return; }
   const nm=document.getElementById('catNm').value.trim().toUpperCase();
   if(!nm){document.getElementById('catNm').focus();return;}
-  $.cats.push({id:gid(),name:nm});
-  closeSh('sh-cat'); renderChs(); toast(nm+' создан');
+  try{
+    const out=await apiReq('/api/servers/'+$.sid+'/sections',{method:'POST',auth:true,body:{name:nm}});
+    if(out&&out.server) applyServerData(out.server,true);
+    closeSh('sh-cat'); renderChs(); toast(nm+' создан');
+  }catch(e){ toast(e.status===403?'Только администратор может добавлять разделы':'Ошибка создания раздела'); }
 }
 
 // ── Long press ──
@@ -3023,6 +3303,7 @@ const _delSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" strok
 const _addSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
 
 function showCtxCh(cid, e){
+  if(!canManage('manageChannels')) return;
   showCtx([
     {icon:_editSvg, label:'Переименовать', action:()=>openEditCh(cid)},
     {icon:_delSvg,  label:'Удалить канал', danger:true, action:()=>deleteCh(cid)},
@@ -3032,6 +3313,7 @@ function showCtxCh(cid, e){
 const _pinSvg=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>`;
 
 function showCtxCat(catId, e){
+  if(!canManage('manageChannels') && !canManage('manageBots')) return;
   const cat=$.cats.find(c=>c.id===catId);
   const addItem=cat&&cat.botId
     ? {icon:_addSvg, label:'Добавить бота', action:()=>openAddBot()}
@@ -3074,10 +3356,9 @@ function doEditCh(){
   if(!raw){document.getElementById('echNm').focus();return;}
   const nm=raw.toLowerCase().replace(/\s+/g,'-');
   const ds=document.getElementById('echDs').value.trim();
-  $.chs[_editChId].name=nm; $.chs[_editChId].desc=ds;
-  closeSh('sh-ech'); renderChs();
-  if($.cur===_editChId) setTb(($.chs[_editChId].type==='voice'?'🔊 ':'#')+nm,true,$.chs[_editChId].type!=='voice');
-  toast('Канал обновлён');
+  apiReq('/api/servers/'+$.sid+'/channels/'+_editChId+'/update',{method:'POST',auth:true,body:{name:nm,desc:ds}})
+    .then(()=>{ closeSh('sh-ech'); toast('Канал обновлён'); })
+    .catch(()=>toast('Ошибка обновления канала'));
 }
 
 function _botDelConfirm(title, action){
@@ -3090,42 +3371,34 @@ function deleteCh(cid){
   const ch=$.chs[cid];
   if(ch&&ch.botId){
     _botDelConfirm('Удалить канал бота?',()=>{
-      $.bots=$.bots.filter(b=>b.id!==ch.botId);
-      if($.cur===cid){$.cur=null;setView('ch');setTb('morv',false,false);}
-      delete $.chs[cid]; delete $.msgs[cid];
-      const cat=$.cats.find(c=>c.isBotCat);
-      if(cat&&!Object.values($.chs).some(c=>c.cat===cat.id)){
-        $.cats=$.cats.filter(c=>!c.isBotCat);
-      }
-      renderChs(); renderBotList(); toast('Канал удалён');
+      apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/delete',{method:'POST',auth:true})
+        .then(()=>toast('Канал удалён'))
+        .catch(()=>toast('Ошибка удаления канала'));
     });
     return;
   }
-  delete $.chs[cid]; delete $.msgs[cid];
-  if($.cur===cid){$.cur=null;setView('ch');setTb('morv',false,false);}
-  renderChs(); renderBotList(); toast('Канал удалён');
+  apiReq('/api/servers/'+$.sid+'/channels/'+cid+'/delete',{method:'POST',auth:true})
+    .then(()=>toast('Канал удалён'))
+    .catch(()=>toast('Ошибка удаления канала'));
 }
 
 function deleteCat(catId){
   const cat=$.cats.find(c=>c.id===catId);
   if(cat&&cat.isBotCat){
     _botDelConfirm('Удалить раздел ботов?',()=>{
-      Object.values($.chs).filter(c=>c.cat===catId).forEach(c=>{
-        if(c.botId) $.bots=$.bots.filter(b=>b.id!==c.botId);
-        if($.cur===c.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-        delete $.chs[c.id]; delete $.msgs[c.id];
-      });
-      $.cats=$.cats.filter(c=>c.id!==catId);
-      renderChs(); renderBotList(); toast('Раздел удалён');
+      const secIndex=Number.isInteger(cat.serverSecIndex)?cat.serverSecIndex:-1;
+      if(secIndex<0){ toast('Раздел не найден'); return; }
+      apiReq('/api/servers/'+$.sid+'/sections/'+secIndex+'/delete',{method:'POST',auth:true})
+        .then(()=>toast('Раздел удалён'))
+        .catch(()=>toast('Ошибка удаления раздела'));
     });
     return;
   }
-  Object.values($.chs).filter(c=>c.cat===catId).forEach(c=>{
-    if($.cur===c.id){$.cur=null;setView('ch');setTb('morv',false,false);}
-    delete $.chs[c.id]; delete $.msgs[c.id];
-  });
-  $.cats=$.cats.filter(c=>c.id!==catId);
-  renderChs(); renderBotList(); toast('Раздел удалён');
+  const secIndex=cat&&Number.isInteger(cat.serverSecIndex)?cat.serverSecIndex:-1;
+  if(secIndex<0){ toast('Раздел не найден'); return; }
+  apiReq('/api/servers/'+$.sid+'/sections/'+secIndex+'/delete',{method:'POST',auth:true})
+    .then(()=>toast('Раздел удалён'))
+    .catch(()=>toast('Ошибка удаления раздела'));
 }
 let _editCatId=null;
 function openEditCat(catId){
@@ -3139,8 +3412,10 @@ function doEditCat(){
   const nm=document.getElementById('ecatNm').value.trim().toUpperCase();
   if(!nm){document.getElementById('ecatNm').focus();return;}
   const cat=$.cats.find(c=>c.id===_editCatId);
-  cat.name=nm;
-  closeSh('sh-ecat'); renderChs(); toast('Раздел обновлён');
+  if(!cat||!Number.isInteger(cat.serverSecIndex)){ toast('Раздел не найден'); return; }
+  apiReq('/api/servers/'+$.sid+'/sections/'+cat.serverSecIndex+'/update',{method:'POST',auth:true,body:{name:nm}})
+    .then(()=>{ closeSh('sh-ecat'); toast('Раздел обновлён'); })
+    .catch(()=>toast('Ошибка обновления раздела'));
 }
 
 // ── Server info ──
@@ -3372,14 +3647,25 @@ function renderSeedList(){
   if(btn) btn.style.display=$.seeds.length>=3?'none':'block';
 }
 function confirmPanic(){ openSh('sh-panic'); }
-function doPanic(){
+async function doPanic(){
+  try{ await apiReq('/api/panic',{method:'POST',auth:true}); }catch(e){}
   Object.keys($.msgs).forEach(cid=>{$.msgs[cid]=($.msgs[cid]||[]).filter(m=>m.aid!==$.me.id);});
   $.scheduled.forEach(s=>clearTimeout(s._timer));
   $.scheduled=[];
+  localStorage.removeItem('morv_last_server');
+  localStorage.removeItem('morv_token');
+  API.token='';
+  _banLockOn=false;
+  localStorage.removeItem('morv_ban_lock');
+  localStorage.removeItem('morv_ban_reason');
   closeSh('sh-panic');
+  const settings=document.getElementById('sh-settings');
+  if(settings) closeSh('sh-settings');
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
+  history.replaceState({},'','/login');
   toast('Данные удалены');
+  location.reload();
 }
 
 // ── External link ──
@@ -3395,22 +3681,7 @@ function openLink(url){
 function doOpenLink(){ closeSh('sh-link'); window.open(_pendingLink,'_blank','noopener'); }
 
 // ── Simulate activity ──
-function sim(){
-  const chat=['кто онлайн?','привет 👋','morv 🔥','тест','анонимно — круто','ок','...','+','🤫'];
-  const go=()=>{
-    const tx=Object.values($.chs).filter(c=>c.type==='text'&&!c.readonly);
-    if(!tx.length)return;
-    const ch=tx[~~(Math.random()*tx.length)];
-    const oth=$.members.filter(m=>!m.you);
-    if(!oth.length)return;
-    const m=oth[~~(Math.random()*oth.length)];
-    $.msgs[ch.id].push({id:gid(),aid:m.id,author:m.name,text:chat[~~(Math.random()*chat.length)],ts:Date.now(),reactions:{}});
-    if($.cur===ch.id){renderMsgs();scrollDnIfAtBottom();}
-    else{$.unread[ch.id]=($.unread[ch.id]||0)+1; renderChs();}
-    setTimeout(go,10000+Math.random()*25000);
-  };
-  setTimeout(go,6000+Math.random()*10000);
-}
+function sim(){}
 
 // ── Format mode ──
 const FMT_MAP = {
@@ -3459,6 +3730,9 @@ window.addEventListener('unhandledrejection', function(e){
   // suppress fetch/network errors from sticker loading
   if(e.reason && (String(e.reason).includes('fetch') || String(e.reason).includes('load'))) e.preventDefault();
 });
+window.addEventListener('popstate',()=>{ _enforceBanRoute(); });
+setInterval(()=>{ if(_banLockOn) _enforceBanRoute(); },700);
+
 window.onerror = function(msg, src, line, col, err) {
   const info = (err && err.stack) ? err.stack.slice(0,200) : (msg+' L'+line+':'+col);
   console.warn('MORV_ERR:', info);
@@ -3467,8 +3741,44 @@ window.onerror = function(msg, src, line, col, err) {
   return false;
 };
 
-document.addEventListener('DOMContentLoaded',()=>{
+document.addEventListener('DOMContentLoaded',async ()=>{
   applyAccent('#2BD1FF');
+  startStatePoll();
+  hideInviteNotFound();
+  const pth=location.pathname||'';
+  if(localStorage.getItem('morv_ban_lock')==='1'){
+    _banLockOn=true;
+    _banReason=localStorage.getItem('morv_ban_reason')||'';
+    showBlocked(_banReason);
+  }
+  if(!_banLockOn) _hideBanScreen();
+  if(/^\/servers\//i.test(pth)||/^\/invite\//i.test(pth)){
+    document.getElementById('landing').style.display='none';
+  }
+  try{
+    await ensureSession();
+    const path=location.pathname||'';
+    const srvM=path.match(/^\/servers\/(srv_[a-z0-9]{8}|[a-z0-9]{8})$/i);
+    const invM=path.match(/^\/invite\/([a-z0-9]{10})$/i);
+    if(invM){
+      try{
+        const j=await apiReq('/api/invites/'+invM[1]+'/join',{method:'POST',auth:true});
+        const srv=await getMyServerById(j.serverId);
+        if(srv) boot(srv.id,srv.name,srv); else showInviteNotFound();
+      }catch(e){ showInviteNotFound(); }
+    } else if(srvM){
+      const srv=await getMyServerById(srvM[1]);
+      if(srv) boot(srv.id,srv.name,srv); else { toast('Сервер не найден'); history.replaceState({},'','/login'); }
+    } else {
+      const last=localStorage.getItem('morv_last_server');
+      if(last){
+        const srv=await getMyServerById(last);
+        if(srv) boot(srv.id,srv.name,srv); else document.getElementById('landing').style.display='flex';
+      } else {
+        document.getElementById('landing').style.display='flex';
+      }
+    }
+  }catch(e){}
   const btn=document.getElementById('sndBtn');
   if(!btn)return;
   let _t;
@@ -3505,9 +3815,10 @@ document.addEventListener('DOMContentLoaded',()=>{
 function openCoreApp(){
   const ch=$.chs[$.cur];
   if(!ch||!ch.coreApp) return;
+  if(!$.isAdmin){ toast('В этот канал нельзя писать'); return; }
   const body=document.getElementById('coreAppBody');
   // Route to Control Center if this is the CC bot channel
-  const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341');
+  const bot=$.bots.find(b=>b.id===ch.botId&&b.code==='857341') || ((ch.name||'').toLowerCase()==='control-center'?{id:ch.botId||'cc',code:'857341'}:null);
   if(bot){ renderControlCenter(body); document.getElementById('coreAppOverlay').classList.add('on'); return; }
   const msgs=Object.values($.msgs).flat();
   const totalMsgs=msgs.filter(m=>!m.sys).length;

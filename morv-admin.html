@@ -410,6 +410,37 @@ const STATE = {
   log: [],
 };
 
+const ADMIN = { token:'', servers:[] };
+async function adminReq(path, opts={}){
+  const headers=Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(ADMIN.token) headers.Authorization='Bearer '+ADMIN.token;
+  const res=await fetch(path,{method:opts.method||'GET',headers,body:opts.body?JSON.stringify(opts.body):undefined});
+  let data={};
+  try{ data=await res.json(); }catch(e){}
+  if(!res.ok){ const er=new Error(data.error||('HTTP '+res.status)); er.status=res.status; throw er; }
+  return data;
+}
+async function syncAdminServers(){
+  if(!ADMIN.token) return [];
+  const data=await adminReq('/api/admin/servers');
+  ADMIN.servers=data.servers||[];
+  return ADMIN.servers;
+}
+function serverInviteUrl(s){
+  return s&&s.invite&&s.invite.code ? (location.origin+'/invite/'+s.invite.code) : '';
+}
+function mergedServerList(){
+  const localFo=STATE.foServers||[];
+  const backend=(ADMIN.servers||[]).map((sv)=>({
+    id:sv.id, name:(sv.name||sv.id), org:sv.org||'USER', type:(sv.type||'NORMAL'),
+    sections:sv.sections||[], status:sv.status||'active', created:nowDate(), inviteUrl:serverInviteUrl(sv), source:'backend'
+  }));
+  const map=new Map();
+  backend.forEach((x)=>map.set(x.id,x));
+  localFo.forEach((x)=>{ if(!map.has(x.id)) map.set(x.id,Object.assign({},x,{source:'local'})); });
+  return Array.from(map.values());
+}
+
 // ── UTILS ──
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function uid(){ return 'srv_'+Math.random().toString(36).slice(2,8); }
@@ -440,13 +471,16 @@ function nowTS(){
 }
 
 // ── LOGIN ──
-function doLogin(){
+async function doLogin(){
   const v = document.getElementById('pwdInp').value;
-  if(v==='mrvall106'){
+  try{
+    const data=await adminReq('/api/admin/login',{method:'POST',body:{password:v}});
+    ADMIN.token=data.token||'';
     document.getElementById('login').classList.add('out');
     document.getElementById('app').classList.add('on');
+    await syncAdminServers();
     renderAll();
-  } else {
+  } catch(e){
     const err=document.getElementById('loginErr');
     err.textContent='Неверный пароль';
     document.getElementById('pwdInp').value='';
@@ -498,13 +532,15 @@ function closeSb(){ document.getElementById('sidebar').classList.remove('open');
 
 // ── STATS & BADGES ──
 function updateStats(){
-  document.getElementById('stat-servers').textContent = STATE.foServers.filter(s=>s.status==='active').length;
+  const all=mergedServerList();
+  document.getElementById('stat-servers').textContent = all.filter(s=>s.status==='active').length;
   document.getElementById('stat-banned').textContent = STATE.banned.length;
   document.getElementById('stat-orgs').textContent = STATE.orgs.length;
   document.getElementById('stat-schools').textContent = STATE.schools.length;
 }
 function updateBadges(){
-  document.getElementById('badge-servers').textContent = STATE.foServers.filter(s=>s.status==='active').length;
+  const all=mergedServerList();
+  document.getElementById('badge-servers').textContent = all.filter(s=>s.status==='active').length;
   document.getElementById('badge-banned').textContent = STATE.banned.length;
 }
 
@@ -525,38 +561,60 @@ function renderLog(){
 }
 
 // ── FO SERVERS LIST ──
-function renderFOServers(){
+async function renderFOServers(){
   const box=document.getElementById('fo-servers-wrap');
-  const list=STATE.foServers;
-  if(!list.length){ box.innerHTML='<div class="empty" style="margin-top:40px">Серверов FO/FSC нет.<br><span style="font-size:10px">Создайте серверы в разделах Организации или FSC.</span></div>'; return; }
+  try{ await syncAdminServers(); }catch(e){}
+
+  const list=mergedServerList();
+  if(!list.length){
+    box.innerHTML='<div class="empty" style="margin-top:40px">Серверов нет</div>';
+    return;
+  }
+
   const hdr=`<div style="display:flex;gap:8px;margin-bottom:12px;">
     <button class="sec-btn" onclick="openBanByIdModal()">+ Заблокировать по ID</button>
   </div>`;
-  const rows=list.map(s=>`
-    <div class="ban-entry" style="border-left-color:${s.status==='banned'?'var(--red)':'var(--blue)'};cursor:pointer"
-      onmousedown="lpStart(event,()=>openEditFOServer('${s.id}'))" onmouseup="lpEnd()" onmouseleave="lpEnd()"
-      ontouchstart="lpStart(event,()=>openEditFOServer('${s.id}'))" ontouchend="lpEnd()" ontouchcancel="lpEnd()">
+
+  const rows=list.map((sv)=>{
+    const isFo=(sv.type==='FO'||sv.type==='FSC');
+    const typeChip=(sv.type==='FSC'?'school':'fo');
+    const title=isFo?esc(sv.name):'Сервер пользователя';
+    const invitePart=(isFo&&sv.inviteUrl)?` · <span onclick="navigator.clipboard.writeText('${sv.inviteUrl}').then(()=>toast('Invite скопирован')).catch(()=>toast('Invite: ${sv.inviteUrl}'))" style="color:var(--ac);cursor:pointer;border-bottom:1px dashed var(--ac)">INVITE</span>`:'';
+    const sectionsPart=(isFo&&sv.sections&&sv.sections.length)
+      ? '<div style="margin-top:8px;font-size:10px;color:var(--t3)">'+sv.sections.map(sec=>'<span style="margin-right:8px">'+esc(sec.name)+' <span style="color:var(--t3)">('+(sec.channels?sec.channels.length:0)+' кан.)</span></span>').join('')+'</div>'
+      : '';
+    const lpAttrs=isFo
+      ? `onmousedown="lpStart(event,()=>openEditFOServer('${sv.id}'))" onmouseup="lpEnd()" onmouseleave="lpEnd()" ontouchstart="lpStart(event,()=>openEditFOServer('${sv.id}'))" ontouchend="lpEnd()" ontouchcancel="lpEnd()"`
+      : '';
+
+    return `<div class="ban-entry" style="border-left-color:${sv.status==='banned'?'var(--red)':'var(--blue)'};cursor:pointer" ${lpAttrs}>
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <div>
-          <div style="font-size:12px;color:var(--t);margin-bottom:3px">${esc(s.name)}</div>
-          <div style="font-size:9px;color:var(--t3);letter-spacing:.06em">ID: <span onclick="copyId('${s.id}')" title="Копировать ID" style="color:var(--ac);cursor:pointer;border-bottom:1px dashed var(--ac);letter-spacing:.08em">${s.id}</span> · ${s.org} · <span class="chip ${s.type==='FSC'?'school':'fo'}" style="padding:1px 5px;font-size:8px">${s.type}</span> · ${s.created}</div>
+          <div style="font-size:12px;color:var(--t);margin-bottom:3px">${title}</div>
+          <div style="font-size:9px;color:var(--t3);letter-spacing:.06em">ID: <span onclick="copyId('${sv.id}')" title="Копировать ID" style="color:var(--ac);cursor:pointer;border-bottom:1px dashed var(--ac);letter-spacing:.08em">${sv.id}</span> · <span class="chip ${typeChip}" style="padding:1px 5px;font-size:8px">${sv.type||'NORMAL'}</span>${invitePart}</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
-          <span class="status ${s.status==='banned'?'banned':'active'}">${s.status==='banned'?'Заблокирован':'Активен'}</span>
-          <span style="font-size:9px;color:var(--t3);letter-spacing:.06em">удержи для ред.</span>
+          <span class="status ${sv.status==='banned'?'banned':'active'}">${sv.status==='banned'?'Заблокирован':'Активен'}</span>
+          <span style="font-size:9px;color:var(--t3);letter-spacing:.06em">${isFo?'удержи для ред.':'без редактирования'}</span>
         </div>
       </div>
-      ${s.sections&&s.sections.length?'<div style="margin-top:8px;font-size:10px;color:var(--t3)">'+s.sections.map(sec=>'<span style="margin-right:8px">'+esc(sec.name)+' <span style="color:var(--t3)">('+sec.channels.length+' кан.)</span></span>').join('')+'</div>':''}
-    </div>`).join('');
+      ${sectionsPart}
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="act-btn danger" onclick="deleteFOServer('${sv.id}')" style="margin:0;padding:5px 8px">Удалить</button>
+      </div>
+    </div>`;
+  }).join('');
+
   box.innerHTML=hdr+rows;
 }
+
 function banFOServer(id){
-  const s=STATE.foServers.find(x=>x.id===id); if(!s) return;
-  showConfirm('Заблокировать сервер?',`Сервер «${s.name}» (${s.id}) будет заблокирован.`,()=>{
-    s.status='banned';
-    STATE.banned.push({id:s.id,name:s.name,reason:'Нарушение правил',date:nowDate()});
-    addLog(`FO-сервер «${s.name}» заблокирован`);
-    updateBadges(); updateStats(); renderFOServers(); renderBanned();
+  const s=(ADMIN.servers||[]).find(x=>x.id===id)||STATE.foServers.find(x=>x.id===id); if(!s) return;
+  showConfirm('Заблокировать сервер?',`Сервер (${s.id}) будет заблокирован.`,async ()=>{
+    try{ await adminReq('/api/admin/ban/server/'+id,{method:'POST',body:{reason:'Нарушение правил'}}); }catch(e){}
+    STATE.banned.push({id:s.id,name:s.name||s.id,reason:'Нарушение правил',date:nowDate()});
+    addLog(`Сервер ${s.id} заблокирован`);
+    updateBadges(); updateStats(); await renderFOServers(); renderBanned();
     toast(`Сервер заблокирован`);
   });
 }
@@ -583,11 +641,11 @@ function openBanByIdModal(){
     {label:'Заблокировать',cls:'danger',fn:doBanById}
   ]);
 }
-function doBanById(){
+async function doBanById(){
   const id=document.getElementById('ban-id-inp').value.trim();
   const reason=document.getElementById('ban-reason-inp').value.trim()||'Нарушение правил';
   if(!id){ toast('Введите ID',true); return; }
-  const fo=STATE.foServers.find(s=>s.id===id);
+  const fo=mergedServerList().find(s=>s.id===id);
   if(!fo){
     // ID not found — show error inside modal
     const errEl=document.getElementById('ban-id-err');
@@ -596,10 +654,11 @@ function doBanById(){
     return;
   }
   if(STATE.banned.find(b=>b.id===id)){ toast('Уже в бан-листе',true); return; }
+  try{ await adminReq('/api/admin/ban/server/'+id,{method:'POST',body:{reason}}); }catch(e){}
   fo.status='banned';
-  STATE.banned.push({id,name:fo.name,reason,date:nowDate()});
+  STATE.banned.push({id,name:(fo.name||id),reason,date:nowDate()});
   addLog(`ID ${id} добавлен в бан-лист`);
-  updateBadges(); updateStats(); renderBanned(); renderFOServers();
+  updateBadges(); updateStats(); renderBanned(); await renderFOServers();
   M.close(); toast(`ID ${id} заблокирован`);
 }
 
@@ -617,20 +676,22 @@ function renderBanned(){
       <div class="ban-meta">ID: ${b.id} · Дата: ${b.date}</div>
     </div>`).join('');
 }
-function unbanById(id){
+async function unbanById(id){
+  try{ await adminReq('/api/admin/unban/server/'+id,{method:'POST'}); }catch(e){}
   STATE.banned=STATE.banned.filter(b=>b.id!==id);
   const fo=STATE.foServers.find(x=>x.id===id); if(fo) fo.status='active';
   addLog(`ID ${id} удалён из бан-листа`);
-  updateBadges(); updateStats(); renderBanned(); renderFOServers();
+  updateBadges(); updateStats(); renderBanned(); await renderFOServers();
   toast('Разблокировано');
 }
 function clearBanList(){
   if(!STATE.banned.length) return;
-  showConfirm('Очистить бан-лист?','Все заблокированные серверы будут разблокированы.',()=>{
+  showConfirm('Очистить бан-лист?','Все заблокированные серверы будут разблокированы.',async ()=>{
+    for(const b of STATE.banned){ try{ await adminReq('/api/admin/unban/server/'+b.id,{method:'POST'}); }catch(e){} }
     STATE.banned.forEach(b=>{ const fo=STATE.foServers.find(x=>x.id===b.id); if(fo) fo.status='active'; });
     STATE.banned=[];
     addLog('Бан-лист очищен');
-    updateBadges(); updateStats(); renderBanned(); renderFOServers();
+    updateBadges(); updateStats(); renderBanned(); await renderFOServers();
     toast('Бан-лист очищен');
   });
 }
@@ -816,19 +877,26 @@ function removeSrvChannel(si,ci){
   showSrvBuilder();
 }
 
-function finishServerBuild(){
+async function finishServerBuild(){
   const nameEl=document.getElementById('srv-name-build');
   const name=nameEl?nameEl.value.trim():'';
   if(!name){ toast('Введи название сервера',true); return; }
   _buildSrv.name=name;
   const ctx=_srvBuilderCtx;
   const orgName=ctx.orgName||'FO';
-  const newSrv={
+  let newSrv={
     id:uid(), name, org:orgName,
     type: ctx.type==='fsc'?'FSC':'FO',
     sections:JSON.parse(JSON.stringify(_buildSrv.sections)),
-    status:'active', created:nowDate()
+    status:'active', created:nowDate(), inviteUrl:''
   };
+  try{
+    const r=await adminReq('/api/admin/servers',{method:'POST',body:{name:newSrv.name,type:newSrv.type,org:newSrv.org,sections:newSrv.sections}});
+    if(r&&r.server){
+      newSrv.id=r.server.id;
+      newSrv.inviteUrl=serverInviteUrl(r.server);
+    }
+  }catch(e){ toast('Ошибка создания сервера',true); return; }
   STATE.foServers.push(newSrv);
   if(ctx.type==='org'){
     STATE.orgs[ctx.orgIdx].servers.push({id:newSrv.id,name,type:'FO'});
@@ -840,7 +908,7 @@ function finishServerBuild(){
   }
   addLog(`Сервер «${name}» создан (${newSrv.id})`);
   updateStats(); updateBadges(); renderFOServers();
-  M.close(); toast(`Сервер «${name}» создан`);
+  M.close(); toast(`Сервер «${name}» создан${newSrv.inviteUrl?' · invite готов':''}`);
   _buildSrv=null; _srvBuilderCtx=null;
 }
 
@@ -945,19 +1013,21 @@ function editChNameEdit(si,ci,id){
 function removeSrvSectionEdit(si,id){ const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value; _buildSrv.sections.splice(si,1); _activeSec=Math.max(0,Math.min(_activeSec,_buildSrv.sections.length-1)); showSrvBuilderEdit(id); }
 function addSrvChannelEdit(id){ const n=document.getElementById('ech-inp-new'),t=document.getElementById('ech-type-new'),sn=document.getElementById('esrv-name-build'); if(!n||!n.value.trim()){ toast('Введи название канала',true); return; } if(sn) _buildSrv.name=sn.value; _buildSrv.sections[_activeSec].channels.push({name:n.value.trim(),type:t?t.value:'текст'}); showSrvBuilderEdit(id); }
 function removeSrvChannelEdit(si,ci,id){ const e=document.getElementById('esrv-name-build'); if(e) _buildSrv.name=e.value; _buildSrv.sections[si].channels.splice(ci,1); _activeSec=si; showSrvBuilderEdit(id); }
-function saveServerEdit(id){
+async function saveServerEdit(id){
   const nameEl=document.getElementById('esrv-name-build'); const name=nameEl?nameEl.value.trim():''; if(!name){ toast('Введи название',true); return; }
   const s=STATE.foServers.find(x=>x.id===id); if(!s) return;
   s.name=name; s.sections=JSON.parse(JSON.stringify(_buildSrv.sections));
+  try{ await adminReq('/api/admin/servers/'+id+'/update',{method:'POST',body:{name:s.name,sections:s.sections,org:s.org||''}}); }catch(e){}
   addLog(`Сервер «${name}» обновлён`); renderFOServers(); M.close(); toast('Сохранено');
 }
 function deleteFOServer(id){
-  showConfirm('Удалить сервер?','Сервер и все его данные будут удалены.',()=>{
+  showConfirm('Удалить сервер?','Сервер и все его данные будут удалены.',async ()=>{
+    try{ await adminReq('/api/admin/servers/'+id+'/delete',{method:'POST'}); }catch(e){}
     const s=STATE.foServers.find(x=>x.id===id);
-    if(s) addLog(`Сервер «${s.name}» удалён`);
+    if(s) addLog(`Сервер «${s.name||s.id}» удалён`);
     STATE.foServers=STATE.foServers.filter(x=>x.id!==id);
     STATE.banned=STATE.banned.filter(b=>b.id!==id);
-    updateStats(); updateBadges(); renderFOServers(); M.close(); toast('Сервер удалён');
+    updateStats(); updateBadges(); await renderFOServers(); M.close(); toast('Сервер удалён');
   });
 }
 
@@ -1023,10 +1093,14 @@ function editOrg(i){
   ]);
 }
 function deleteOrg(i){
-  showConfirm('Удалить организацию?','Все серверы организации останутся в общем списке.',()=>{
+  showConfirm('Удалить организацию?','Все её серверы будут удалены.',async ()=>{
+    const org=STATE.orgs[i];
+    const ids=(org&&org.servers?org.servers:[]).map(s=>s.id);
+    for(const sid of ids){ try{ await adminReq('/api/admin/servers/'+sid+'/delete',{method:'POST'}); }catch(e){} }
+    STATE.foServers=STATE.foServers.filter(s=>!ids.includes(s.id));
     addLog(`Организация «${STATE.orgs[i].name}» удалена`);
     STATE.orgs.splice(i,1);
-    updateStats(); renderOrgs(); toast('Организация удалена');
+    updateStats(); await renderFOServers(); renderOrgs(); toast('Организация удалена');
   });
 }
 function openAddOrgModal(){
@@ -1142,10 +1216,15 @@ function editClass(i,j){
   ]);
 }
 function deleteSchool(i){
-  showConfirm('Удалить школу?','Все классы и их серверы будут удалены.',()=>{
+  showConfirm('Удалить школу?','Все классы и их серверы будут удалены.',async ()=>{
+    const sch=STATE.schools[i];
+    const ids=[];
+    (sch.classes||[]).forEach(c=>(c.servers||[]).forEach(s=>ids.push(s.id)));
+    for(const sid of ids){ try{ await adminReq('/api/admin/servers/'+sid+'/delete',{method:'POST'}); }catch(e){} }
+    STATE.foServers=STATE.foServers.filter(s=>!ids.includes(s.id));
     addLog(`Школа «${STATE.schools[i].name}» удалена`);
     STATE.schools.splice(i,1);
-    updateStats(); renderFSC(); toast('Школа удалена');
+    updateStats(); await renderFOServers(); renderFSC(); toast('Школа удалена');
   });
 }
 function openAddSchoolModal(){
